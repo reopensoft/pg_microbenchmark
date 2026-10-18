@@ -67,17 +67,17 @@ select (select count(*) from c), (select max(k_10k) from c), (select min(k_100) 
 ------------------------------------------------------------------------------
 call pgmb.reg('cte.partition_pruned_when_inlined', '{perf,planning,consistency}', $q$
 with c as (select id, bucket, val from g_part)
-select count(*), sum(val) from c where bucket = :b$q$,
+select count(*), sum(val::numeric) from c where bucket = :b$q$,
     setup => '\set b random(0, 15)', equiv => 'cte.partition');
 
 call pgmb.reg('cte.partition_not_pruned_when_materialized', '{perf,planning,consistency,olap}', $q$
 with c as materialized (select id, bucket, val from g_part)
-select count(*), sum(val) from c where bucket = :b$q$,
+select count(*), sum(val::numeric) from c where bucket = :b$q$,
     setup => '\set b random(0, 15)', equiv => 'cte.partition');
 
 call pgmb.reg('cte.partition_pruned_inside_materialized', '{perf,planning,consistency}', $q$
 with c as materialized (select id, bucket, val from g_part where bucket = :b)
-select count(*), sum(val) from c$q$,
+select count(*), sum(val::numeric) from c$q$,
     setup => '\set b random(0, 15)', equiv => 'cte.partition');
 
 -- pruning decided at executor start (stable function) and at run time (value from another CTE)

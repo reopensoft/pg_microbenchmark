@@ -76,6 +76,10 @@
 \else
   \set intarray 0
 \endif
+\if :{?intarray_rows}
+\else
+  \set intarray_rows 2000
+\endif
 \if :{?gucs}
 \else
   \set gucs ''

@@ -178,11 +178,25 @@ from pgmb.config;
 ------------------------------------------------------------------------------
 \if :createonly
 \else
-    -- in-database checks: planning, errors, consistency
-    -- a runaway query (e.g. a recursive CTE that never ends) must not hang the run
+    -- in-database checks: planning, analyze, errors (and consistency and
+    -- checksum with -v client_checks=0), one statement per check, so that
+    -- statement_timeout limits each check on its own: a runaway query (e.g. a
+    -- recursive CTE that never ends) is recorded as a failed check
     set statement_timeout = :'stmt_timeout';
     \echo check planning, errors, consistency
-    call pgmb.run_checks(:run_id);
+    \pset format unaligned
+    \pset tuples_only on
+    \set pgmb_calls :outdir /_check_calls.psql
+    select pgmb.check_call_commands() \g :pgmb_calls
+    \pset format aligned
+    \pset tuples_only off
+    \set ON_ERROR_STOP off
+    \i :pgmb_calls
+    \set ON_ERROR_STOP on
+    select pgmb.exec_enabled('consistency') and not pgmb.client_checks() as pgmb_db_consistency \gset
+    \if :pgmb_db_consistency
+        call pgmb.finish_consistency(:run_id);
+    \endif
 
     -- consistency and checksums on the client side: every statement is sent as
     -- it is, and what comes back is hashed (see pgmb.check_commands)

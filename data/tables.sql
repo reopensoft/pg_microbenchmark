@@ -342,8 +342,15 @@ call pgmb.reg_ddl('data.vacuum_g_dml_trig', 'maintenance', $q$vacuum (analyze) g
 -- The two variables are registered as datasets with exponent 0, so tests can
 -- use :n_g_intarr_len and :n_g_intarr_distinct like any row count.
 ------------------------------------------------------------------------------
+-- With -v intarray=1 the table has a fixed size, :intarray_rows (2000 by
+-- default), whatever the data_scale: building GiST gist__int_ops indexes on
+-- columns with many distinct values takes time that grows with the square
+-- of the row count (about a minute for all of them at 2000 rows, minutes per
+-- index at 10000, hours at 100000).
 insert into pgmb.dataset (name, base_rows, exponent, min_rows) values
-    ('g_intarr',          100000, 1, 500),
+    ('g_intarr',          case when :'intarray' = '1' then greatest(:'intarray_rows'::bigint, 1) else 100000 end,
+                          case when :'intarray' = '1' then 0 else 1 end,
+                          case when :'intarray' = '1' then least(greatest(:'intarray_rows'::bigint, 1), 500) else 500 end),
     ('g_intarr_len',      greatest(:'arr_len'::int, 0), 0, 0),       -- (not a table) length of arr_n
     ('g_intarr_distinct', greatest(:'arr_distinct'::int, 1), 0, 1);  -- (not a table) value domain of arr_n
 

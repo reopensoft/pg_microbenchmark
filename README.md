@@ -148,11 +148,12 @@ All are passed with `-v name=value`.
 | Variable | Default | Meaning |
 |---|---|---|
 | `gucs` | *(empty)* | extra server settings for the run, `name=value,name=value` (no spaces inside a value). Set in the benchmark session, passed to every pgbench connection, recorded in `pgmb_results.run.settings` |
-| `stmt_timeout` | `120s` | `statement_timeout` for the DML phase; `0` disables it |
+| `stmt_timeout` | `120s` | `statement_timeout` for the DML phase: it limits each in-database check on its own (a check that runs longer is recorded as failed and the run goes on) and every statement pgbench sends; `0` disables it |
 | `plan_iterations` | `20` | EXPLAIN repetitions per test in the planning check |
 | `client_checks` | `1` | how result hashes (`consistency`, `checksum`) are computed. `1`: psql sends every statement unchanged and hashes the rows that come back. `0`: inside the server, which has to wrap the statement in a subquery and so plans a slightly different query |
 | `rls_role` | *(empty)* | role for the row level security tests; empty means they are not registered ([details](#row-level-security)) |
 | `intarray` | `0` | `1` installs the `intarray` extension and registers the tests that use it ([details](#intarray)) |
+| `intarray_rows` | `2000` | with `intarray=1`, the fixed number of rows of `g_intarr`, whatever the `data_scale`: GiST `gist__int_ops` index builds grow with the square of the row count |
 | `shared_db` | `0` | `1` allows the first run in a database that already holds other tables |
 
 **Environment**
@@ -170,6 +171,7 @@ All are passed with `-v name=value`.
 | `sanity` | 0 | 1 | 0.5 | isolated | 1 transaction | all |
 | `micro-benchmark` | 0.01 | 1 | 0.5 | isolated | 1 s | all |
 | `mini-benchmark` | 1 | 4 | 0.5 | isolated | 3 s | all |
+| `midi-benchmark` | 5 | 4 | 0.5 | isolated | 5 s | all |
 | `mini-oltp` | 1 | 16 | 0.3 | mixed | 60 s | `oltp,perf` |
 | `mini-olap` | 5 | 2 | 0 | isolated | 10 s | `olap` |
 
@@ -431,6 +433,14 @@ it holds every row, and a test selects variant K by adding `AND id <> -K`
 DDL part of the report. They are not small: about 1.3 MB per 1000 rows of
 `g_intarr`, most of it the GiST index with `siglen = 2024` and the GIN index
 on 100-element arrays.
+
+**Size of `g_intarr`.** With `intarray=1` the table has a fixed number of
+rows, `-v intarray_rows` (2000 by default), whatever the `data_scale`. The
+GiST `gist__int_ops` indexes on columns with many distinct values take time
+that grows with the square of the row count: about a minute for all of them
+at 2000 rows, minutes per index at 10,000 rows, hours at 100,000. Without
+intarray the table grows with `data_scale` as usual, so the `array.int_*`
+tests on it are measured on different sizes with and without intarray.
 
 If the database already has intarray in another schema, that schema is used
 instead. Should it be on the benchmark's `search_path` (for example `public`),

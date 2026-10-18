@@ -6,6 +6,8 @@ insert into pgmb.preset (name, descr, data_scale, base_clients, write_ratio, dur
     0.01,  1, 0.5,  1, 0, 'isolated', '{}'),
 ('mini-benchmark',  'all topics on moderate data, every test on its own with a few connections',
     1,     4, 0.5,  3, 0, 'isolated', '{}'),
+('midi-benchmark',  'all topics on five times the data of mini-benchmark, every test on its own with a few connections',
+    5,     4, 0.5,  5, 0, 'isolated', '{}'),
 ('mini-oltp',       'short transactions mixed in one workload on many connections',
     1,    16, 0.3, 60, 5, 'mixed',    '{oltp,perf}'),
 ('mini-olap',       'heavy queries on larger data, few connections, read-mostly',

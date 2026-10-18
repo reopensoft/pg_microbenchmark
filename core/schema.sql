@@ -405,7 +405,36 @@ begin
     end loop;
 end $$;
 
-create procedure pgmb.run_checks(p_run bigint) language plpgsql as $$
+-- The in-database checks, one test at a time. pgmb.check_list() gives them in
+-- the order they run; pgmb.run_check() runs one. bench.sql calls run_check
+-- once per check from psql (pgmb.check_call_commands), so that
+-- statement_timeout limits each check on its own: a check that runs too long
+-- is recorded as failed and the run goes on.
+create function pgmb.check_list() returns table (ord bigint, kind text, test_id text) stable language sql
+begin atomic
+    select row_number() over (order by k.n, t.ord), k.kind, t.id
+    from pgmb.selected t,
+         (values (1, 'planning'), (2, 'analyze'), (3, 'errors'), (4, 'consistency'), (5, 'checksum')) k(n, kind)
+    where pgmb.exec_enabled(k.kind)
+      and case k.kind
+              when 'planning' then 'planning' = any (t.tags) and t.expect_error is null
+                                   and (pgmb.script_parts(t.sql)).query is not null
+              when 'analyze' then 'analyze' = any (t.tags) and t.expect_error is null
+                                  and (pgmb.script_parts(t.sql)).query is not null
+              when 'errors' then 'errors' = any (t.tags) and t.expect_error is not null
+              -- consistency and checksum run here only with -v client_checks=0
+              when 'consistency' then not pgmb.client_checks()
+                                      and 'consistency' = any (t.tags) and t.equiv is not null and t.kind = 'read'
+                                      and (pgmb.script_parts(t.sql)).query is not null
+              when 'checksum' then not pgmb.client_checks()
+                                   and 'checksum' = any (t.tags) and t.kind = 'read' and t.expect_error is null
+                                   and (pgmb.script_parts(t.sql)).query is not null
+                                   and not ('consistency' = any (t.tags) and t.equiv is not null and pgmb.exec_enabled('consistency'))
+          end
+    order by 1;
+end;
+
+create procedure pgmb.run_check(p_run bigint, p_kind text, p_id text) language plpgsql as $$
 declare
     t      pgmb.test;
     iters  int := (select plan_iterations from pgmb.config);
@@ -418,147 +447,134 @@ declare
     st     record;
     stmt   text;
 begin
+    select * into strict t from pgmb.test where id = p_id;
+
     -- planning: time, memory and stability of the plan shape across parameter values
-    if pgmb.exec_enabled('planning') then
-        for t in select * from pgmb.selected
-                 where 'planning' = any (tags) and expect_error is null
-                   and (pgmb.script_parts(sql)).query is not null
-                 order by ord loop
-            -- the block is always left through an exception, so that SET LOCAL
-            -- and temporary tables of the test are rolled back
-            begin
-                parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
-                foreach stmt in array parts.pre loop execute stmt; end loop;
-                times := '{}'; shapes := '{}'; mem := 0;
-                for i in 1 .. iters loop
-                    execute 'explain (format json, costs off, summary on, memory on) '
-                            || (pgmb.script_parts(pgmb.bind(t.sql, t.setup))).query into j;
-                    times  := times || (j->0->>'Planning Time')::double precision;
-                    shapes := shapes || pgmb.plan_shape((j->0->'Plan')::jsonb);
-                    mem    := greatest(mem, (j->0->'Planning'->>'Memory Used')::bigint);
-                end loop;
-                raise exception using errcode = 'PGMB0';
-            exception
-                when sqlstate 'PGMB0' then
-                    insert into pgmb_results.planning
-                    select p_run, t.id, iters, min(tm), percentile_cont(0.5) within group (order by tm), max(tm),
-                           mem, count(distinct sh), mode() within group (order by sh)
-                    from unnest(times, shapes) u(tm, sh);
-                when others then
-                    insert into pgmb_results.checks values (p_run, t.id, 'planning', false, sqlstate || ': ' || sqlerrm);
-            end;
-        end loop;
-    end if;
+    if p_kind = 'planning' then
+        -- the block is always left through an exception, so that SET LOCAL
+        -- and temporary tables of the test are rolled back
+        begin
+            parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
+            foreach stmt in array parts.pre loop execute stmt; end loop;
+            times := '{}'; shapes := '{}'; mem := 0;
+            for i in 1 .. iters loop
+                execute 'explain (format json, costs off, summary on, memory on) '
+                        || (pgmb.script_parts(pgmb.bind(t.sql, t.setup))).query into j;
+                times  := times || (j->0->>'Planning Time')::double precision;
+                shapes := shapes || pgmb.plan_shape((j->0->'Plan')::jsonb);
+                mem    := greatest(mem, (j->0->'Planning'->>'Memory Used')::bigint);
+            end loop;
+            raise exception using errcode = 'PGMB0';
+        exception
+            when sqlstate 'PGMB0' then
+                insert into pgmb_results.planning
+                select p_run, t.id, iters, min(tm), percentile_cont(0.5) within group (order by tm), max(tm),
+                       mem, count(distinct sh), mode() within group (order by sh)
+                from unnest(times, shapes) u(tm, sh);
+            when others then
+                insert into pgmb_results.checks values (p_run, t.id, 'planning', false, sqlstate || ': ' || sqlerrm);
+        end;
 
     -- analyze: one EXPLAIN ANALYZE per test, for row estimates and node memory.
     -- Writers are executed too; like everything else here they are rolled back.
-    if pgmb.exec_enabled('analyze') then
-        for t in select * from pgmb.selected
-                 where 'analyze' = any (tags) and expect_error is null
-                   and (pgmb.script_parts(sql)).query is not null
-                 order by ord loop
-            begin
-                perform setseed(0.42);
-                parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
-                foreach stmt in array parts.pre loop execute stmt; end loop;
-                execute 'explain (analyze, format json, timing off, buffers off, summary off) ' || parts.query into j;
-                raise exception using errcode = 'PGMB0';
-            exception
-                when sqlstate 'PGMB0' then
-                    select * into st from pgmb.plan_stats((j->0->'Plan')::jsonb);
-                    insert into pgmb_results.explain_stats
-                    values (p_run, t.id, st.nodes, st.max_qerror, st.worst_node, st.worst_est, st.worst_actual,
-                            (j->0->'Plan'->>'Plan Rows')::double precision, (j->0->'Plan'->>'Actual Rows')::double precision,
-                            st.mem_kb, st.disk_kb, pgmb.plan_shape((j->0->'Plan')::jsonb));
-                when others then
-                    insert into pgmb_results.checks values (p_run, t.id, 'analyze', false, sqlstate || ': ' || sqlerrm);
-            end;
-        end loop;
-    end if;
+    elsif p_kind = 'analyze' then
+        begin
+            perform setseed(0.42);
+            parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
+            foreach stmt in array parts.pre loop execute stmt; end loop;
+            execute 'explain (analyze, format json, timing off, buffers off, summary off) ' || parts.query into j;
+            raise exception using errcode = 'PGMB0';
+        exception
+            when sqlstate 'PGMB0' then
+                select * into st from pgmb.plan_stats((j->0->'Plan')::jsonb);
+                insert into pgmb_results.explain_stats
+                values (p_run, t.id, st.nodes, st.max_qerror, st.worst_node, st.worst_est, st.worst_actual,
+                        (j->0->'Plan'->>'Plan Rows')::double precision, (j->0->'Plan'->>'Actual Rows')::double precision,
+                        st.mem_kb, st.disk_kb, pgmb.plan_shape((j->0->'Plan')::jsonb));
+            when others then
+                insert into pgmb_results.checks values (p_run, t.id, 'analyze', false, sqlstate || ': ' || sqlerrm);
+        end;
 
     -- errors: the statement must fail with the expected SQLSTATE
-    if pgmb.exec_enabled('errors') then
-        for t in select * from pgmb.selected
-                 where 'errors' = any (tags) and expect_error is not null order by ord loop
-            begin
-                -- SET LOCAL in front of the statement is honoured, as in the other checks
-                parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
-                if parts.query is not null then
-                    foreach stmt in array parts.pre loop execute stmt; end loop;
-                    execute parts.query;
-                else
-                    execute pgmb.bind(t.sql, t.setup);
-                end if;
-                -- no error: leave through an exception anyway, so that whatever
-                -- the statement did (an index, a row) is rolled back
-                raise exception using errcode = 'PGMB0';
-            exception
-                when sqlstate 'PGMB0' then
-                    insert into pgmb_results.checks
-                    values (p_run, t.id, 'errors', false, 'expected ' || t.expect_error || ', got no error');
-                -- OTHERS does not include query_canceled, which the cancel tests expect
-                when query_canceled or others then
-                    insert into pgmb_results.checks
-                    values (p_run, t.id, 'errors', sqlstate = t.expect_error,
-                            case when sqlstate = t.expect_error then sqlstate
-                                 else 'expected ' || t.expect_error || ', got ' || sqlstate || ': ' || sqlerrm end);
-            end;
-        end loop;
-    end if;
+    elsif p_kind = 'errors' then
+        begin
+            -- SET LOCAL in front of the statement is honoured, as in the other checks
+            parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
+            if parts.query is not null then
+                foreach stmt in array parts.pre loop execute stmt; end loop;
+                execute parts.query;
+            else
+                execute pgmb.bind(t.sql, t.setup);
+            end if;
+            -- no error: leave through an exception anyway, so that whatever
+            -- the statement did (an index, a row) is rolled back
+            raise exception using errcode = 'PGMB0';
+        exception
+            when sqlstate 'PGMB0' then
+                insert into pgmb_results.checks
+                values (p_run, t.id, 'errors', false, 'expected ' || t.expect_error || ', got no error');
+            -- OTHERS does not include query_canceled, which the cancel tests expect
+            when query_canceled or others then
+                insert into pgmb_results.checks
+                values (p_run, t.id, 'errors', sqlstate = t.expect_error,
+                        case when sqlstate = t.expect_error then sqlstate
+                             else 'expected ' || t.expect_error || ', got ' || sqlstate || ': ' || sqlerrm end);
+        end;
 
     -- consistency and checksum hash the rows a statement returns. By default that is
     -- done on the client side (pgmb.check_commands): the statement is sent
-    -- unchanged, as an application would send it. The loops below are the
-    -- in-database variant (-v client_checks=0), which has to wrap the statement
-    -- in a subquery and therefore plans a slightly different query.
-
-    -- consistency: all members of an equivalence group must return the same set of rows
-    if pgmb.exec_enabled('consistency') and not pgmb.client_checks() then
-        for t in select * from pgmb.selected
-                 where 'consistency' = any (tags) and equiv is not null and kind = 'read'
-                   and (pgmb.script_parts(sql)).query is not null
-                 order by ord loop
-            begin
-                perform setseed(0.42);       -- same parameter values for every member of the group
-                parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
-                foreach stmt in array parts.pre loop execute stmt; end loop;
-                execute format('select md5(coalesce(string_agg(x::text, chr(10) order by x::text), '''')) '
-                               '|| '' rows='' || count(*) from (%s) x', parts.query) into h;
-                raise exception using errcode = 'PGMB0';
-            exception
-                when sqlstate 'PGMB0' then
-                    insert into pgmb_results.checks values (p_run, t.id, 'consistency', true, h);
-                when others then
-                    insert into pgmb_results.checks values (p_run, t.id, 'consistency', false, sqlstate || ': ' || sqlerrm);
-            end;
-        end loop;
-
-        call pgmb.finish_consistency(p_run);
+    -- unchanged, as an application would send it. This is the in-database
+    -- variant (-v client_checks=0), which has to wrap the statement in a
+    -- subquery and therefore plans a slightly different query.
+    -- consistency: all members of an equivalence group must return the same set
+    -- of rows (pgmb.finish_consistency compares them); checksum: a hash of the
+    -- whole result, to compare the same test between two runs.
+    elsif p_kind in ('consistency', 'checksum') then
+        begin
+            perform setseed(0.42);       -- same parameter values for every member of a group, and in every run
+            parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
+            foreach stmt in array parts.pre loop execute stmt; end loop;
+            execute format('select md5(coalesce(string_agg(x::text, chr(10) order by x::text), '''')) '
+                           '|| '' rows='' || count(*) from (%s) x', parts.query) into h;
+            raise exception using errcode = 'PGMB0';
+        exception
+            when sqlstate 'PGMB0' then
+                insert into pgmb_results.checks values (p_run, t.id, p_kind, true, h);
+            when others then
+                insert into pgmb_results.checks values (p_run, t.id, p_kind, false, sqlstate || ': ' || sqlerrm);
+        end;
+    else
+        raise exception 'unknown check kind "%"', p_kind;
     end if;
+end $$;
 
-    -- checksum: hash of the whole result, independent of row order, to compare
-    -- the same test between two runs (report/compare.sql). Tests that are in a
-    -- consistency group already have one.
-    if pgmb.exec_enabled('checksum') and not pgmb.client_checks() then
-        for t in select * from pgmb.selected
-                 where 'checksum' = any (tags) and kind = 'read' and expect_error is null
-                   and (pgmb.script_parts(sql)).query is not null
-                   and not ('consistency' = any (tags) and equiv is not null and pgmb.exec_enabled('consistency'))
-                 order by ord loop
-            begin
-                perform setseed(0.42);
-                parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
-                foreach stmt in array parts.pre loop execute stmt; end loop;
-                execute format('select md5(coalesce(string_agg(x::text, chr(10) order by x::text), '''')) '
-                               '|| '' rows='' || count(*) from (%s) x', parts.query) into h;
-                raise exception using errcode = 'PGMB0';
-            exception
-                when sqlstate 'PGMB0' then
-                    insert into pgmb_results.checks values (p_run, t.id, 'checksum', true, h);
-                when others then
-                    insert into pgmb_results.checks values (p_run, t.id, 'checksum', false, sqlstate || ': ' || sqlerrm);
-            end;
-        end loop;
+-- psql commands that run every check as a statement of its own. A check that
+-- fails outside its own error handling (statement_timeout raises
+-- query_canceled) is recorded from psql.
+create function pgmb.check_call_commands() returns setof text stable language sql
+begin atomic
+    select x.cmd
+    from (select c.ord, 1 as i, format('call pgmb.run_check(:run_id, %L, %L);', c.kind, c.test_id) as cmd
+          from pgmb.check_list() c
+          union all
+          select c.ord, 2, format(E'\\if :ERROR\ninsert into pgmb_results.checks values (:run_id, %L, %L, false, '
+                                  ':''LAST_ERROR_SQLSTATE'' || '': '' || :''LAST_ERROR_MESSAGE'');\n\\endif',
+                                  c.test_id, c.kind)
+          from pgmb.check_list() c) x
+    order by x.ord, x.i;
+end;
+
+-- All checks in one call (kept for callers outside bench.sql). Here the
+-- statement_timeout of the caller covers all of them together.
+create procedure pgmb.run_checks(p_run bigint) language plpgsql as $$
+declare
+    c record;
+begin
+    for c in select * from pgmb.check_list() loop
+        call pgmb.run_check(p_run, c.kind, c.test_id);
+    end loop;
+    if pgmb.exec_enabled('consistency') and not pgmb.client_checks() then
+        call pgmb.finish_consistency(p_run);
     end if;
 end $$;
 

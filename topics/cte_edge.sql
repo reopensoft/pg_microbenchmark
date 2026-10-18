@@ -233,11 +233,11 @@ with c as (select g as n from generate_series(1, :n_g_narrow * 5) g)
 select count(*), sum(t.k_100) from c join g_narrow t on t.id = c.n$q$, equiv => 'cte.edge_millions_join');
 
 call pgmb.reg('cte.edge_millions_top_10_materialized', '{perf,planning,analyze,consistency,olap}', $q$
-with c as materialized (select g as n, (g * 7919) % 1000003 as h from generate_series(1, :n_g_narrow * 5) g)
+with c as materialized (select g as n, (g::bigint * 7919) % 1000003 as h from generate_series(1, :n_g_narrow * 5) g)
 select array(select n from c order by h desc, n limit 10)$q$, equiv => 'cte.edge_millions_top');
 
 call pgmb.reg('cte.edge_millions_top_10_inlined', '{perf,planning,analyze,consistency,olap}', $q$
-with c as (select g as n, (g * 7919) % 1000003 as h from generate_series(1, :n_g_narrow * 5) g)
+with c as (select g as n, (g::bigint * 7919) % 1000003 as h from generate_series(1, :n_g_narrow * 5) g)
 select array(select n from c order by h desc, n limit 10)$q$, equiv => 'cte.edge_millions_top');
 
 -- two readers of millions of rows; a reader that needs ten of them
