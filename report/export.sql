@@ -30,6 +30,8 @@ copy (select * from pgmb_results.latency where run_id = :run_id) to stdout with 
 copy (select * from pgmb_results.latency_hist where run_id = :run_id) to stdout with (format csv, header) \g :pgmb_f
 \set pgmb_f :outdir /export_explain_stats.csv
 copy (select * from pgmb_results.explain_stats where run_id = :run_id) to stdout with (format csv, header) \g :pgmb_f
+\set pgmb_f :outdir /export_explain_plan.csv
+copy (select * from pgmb_results.explain_plan where run_id = :run_id) to stdout with (format csv, header) \g :pgmb_f
 \set pgmb_f :outdir /export_resource.csv
 copy (select * from pgmb_results.resource where run_id = :run_id) to stdout with (format csv, header) \g :pgmb_f
 \set pgmb_f :outdir /export_*.csv

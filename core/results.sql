@@ -88,6 +88,98 @@ create table if not exists pgmb_results.explain_stats (
     primary key (run_id, test_id)
 );
 
+-- the full plan of the last EXPLAIN ANALYZE of the analyze check (the top-level
+-- query only), as PostgreSQL printed it; json, not jsonb, so that the keys keep
+-- EXPLAIN's order. exec_ms: Execution Time of every TIMING OFF execution, in order.
+create table if not exists pgmb_results.explain_plan (
+    run_id  bigint not null references pgmb_results.run on delete cascade,
+    test_id text   not null,
+    plan    json   not null,
+    exec_ms double precision[],
+    primary key (run_id, test_id)
+);
+
+-- Figures from one stored plan that can be compared between runs. Counters are
+-- totals over the whole query (the top node's buffers and WAL include its
+-- children; rows are actual rows times loops); a figure the plan does not
+-- carry (an older run, another server version) is NULL.
+drop view if exists pgmb_results.explain_metrics;
+drop function if exists pgmb_results.plan_metrics(json, double precision[]);
+create function pgmb_results.plan_metrics(
+    p_plan json, p_exec_ms double precision[],
+    out iterations int,
+    out exec_ms_min double precision,      -- Execution Time, best and median of the TIMING OFF executions
+    out exec_ms_med double precision,
+    out plan_ms double precision,          -- Planning Time
+    out plan_mem_kb bigint,                -- planner memory
+    out plan_blocks bigint,                -- shared buffers the planner touched (catalogs, statistics)
+    out rows_processed double precision,   -- rows returned by all nodes: the work the plan did
+    out rows_removed double precision,     -- rows read and thrown away by filters, join filters and rechecks
+    out blocks_hit bigint,                 -- shared and local buffers found in shared buffers
+    out blocks_read bigint,                -- ... and read from the OS
+    out blocks_dirtied bigint,
+    out blocks_written bigint,
+    out temp_blocks bigint,                -- temporary file blocks read and written: spills
+    out wal_records bigint,
+    out wal_fpi bigint,
+    out wal_bytes bigint,
+    out heap_fetches bigint,               -- index-only scans that had to visit the heap
+    out index_searches bigint,
+    out lossy_blocks bigint,               -- bitmap heap scans that ran out of work_mem
+    out workers_planned int,
+    out workers_launched int,
+    out output_kb bigint,                  -- result size after conversion to text (SERIALIZE)
+    out node_timing boolean)               -- the plan carries node timings (analyze_timing)
+stable language sql as $$
+    with recursive n(p) as (
+        select p_plan::jsonb->'Plan'
+        union all
+        select c from n, jsonb_array_elements(n.p->'Plans') c),
+    x as (
+        select sum((p->>'Actual Rows')::float8 * (p->>'Actual Loops')::float8) as rows_processed,
+               sum((coalesce((p->>'Rows Removed by Filter')::float8, 0)
+                    + coalesce((p->>'Rows Removed by Join Filter')::float8, 0)
+                    + coalesce((p->>'Rows Removed by Index Recheck')::float8, 0)) * (p->>'Actual Loops')::float8) as rows_removed,
+               sum((p->>'Heap Fetches')::bigint) as heap_fetches,
+               sum((p->>'Index Searches')::bigint) as index_searches,
+               sum((p->>'Lossy Heap Blocks')::bigint) as lossy_blocks,
+               coalesce(sum((p->>'Workers Planned')::int), 0) as workers_planned,
+               coalesce(sum((p->>'Workers Launched')::int), 0) as workers_launched,
+               bool_or(p ? 'Actual Total Time') as node_timing
+        from n)
+    select cardinality(p_exec_ms),
+           (select min(e) from unnest(p_exec_ms) e),
+           (select percentile_cont(0.5) within group (order by e) from unnest(p_exec_ms) e),
+           (j->>'Planning Time')::float8,
+           (j->'Planning'->>'Memory Used')::bigint,
+           (j->'Planning'->>'Shared Hit Blocks')::bigint + (j->'Planning'->>'Shared Read Blocks')::bigint,
+           x.rows_processed, x.rows_removed,
+           (r->>'Shared Hit Blocks')::bigint + (r->>'Local Hit Blocks')::bigint,
+           (r->>'Shared Read Blocks')::bigint + (r->>'Local Read Blocks')::bigint,
+           (r->>'Shared Dirtied Blocks')::bigint + (r->>'Local Dirtied Blocks')::bigint,
+           (r->>'Shared Written Blocks')::bigint + (r->>'Local Written Blocks')::bigint,
+           (r->>'Temp Read Blocks')::bigint + (r->>'Temp Written Blocks')::bigint,
+           (r->>'WAL Records')::bigint, (r->>'WAL FPI')::bigint, (r->>'WAL Bytes')::bigint,
+           x.heap_fetches, x.index_searches, x.lossy_blocks, x.workers_planned, x.workers_launched,
+           (j->'Serialization'->>'Output Volume')::bigint,
+           x.node_timing
+    from x, lateral (select p_plan::jsonb as j) jj, lateral (select jj.j->'Plan' as r) rr
+$$;
+
+create view pgmb_results.explain_metrics as
+select e.run_id, e.test_id, m.*
+from pgmb_results.explain_plan e, pgmb_results.plan_metrics(e.plan, e.exec_ms) m;
+
+-- Two figures differ by more than the tolerance (default 10 %); values below 1
+-- count as 1, so that 0 against 1 block is no difference. NULL on one side only
+-- is a difference, NULL on both is not.
+create or replace function pgmb_results.differs(a double precision, b double precision,
+                                                tol double precision default 0.1) returns boolean
+immutable language sql
+return case when a is null and b is null then false
+            when a is null or b is null then true
+            else greatest(a, 1) / greatest(b, 1) not between 1 / (1 + tol) and 1 + tol end;
+
 -- what one test's pgbench run cost outside the query results (isolated mode)
 create table if not exists pgmb_results.resource (
     run_id     bigint not null references pgmb_results.run on delete cascade,

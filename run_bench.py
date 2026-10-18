@@ -123,6 +123,8 @@ def run_bench(args, label, extra_vars=None):
         ("duration", args.duration),
         ("warmup", args.warmup),
         ("plan_iterations", args.plan_iterations),
+        ("analyze_iterations", args.analyze_iterations),
+        ("analyze_timing", args.analyze_timing),
         ("stmt_timeout", args.stmt_timeout),
         ("pgbench", args.pgbench),
         ("arr_len", args.arr_len),
@@ -231,6 +233,10 @@ def build_parser():
     bench.add_argument("--warmup", help="seconds of unmeasured warm-up")
     bench.add_argument("--plan-iterations", type=int,
                        help="EXPLAIN repetitions in the planning check")
+    bench.add_argument("--analyze-iterations", type=int,
+                       help="EXPLAIN ANALYZE executions per test in the analyze check")
+    bench.add_argument("--analyze-timing", choices=["0", "1"],
+                       help="1: one more EXPLAIN ANALYZE with node timings")
     bench.add_argument("--stmt-timeout", help="statement_timeout, e.g. 120s")
     bench.add_argument("--pgbench", default="pgbench",
                        help="pgbench binary (e.g. from your own build)")

@@ -56,6 +56,14 @@
 \else
   \set plan_iterations 20
 \endif
+\if :{?analyze_iterations}
+\else
+  \set analyze_iterations 3
+\endif
+\if :{?analyze_timing}
+\else
+  \set analyze_timing 0
+\endif
 \if :{?stmt_timeout}
 \else
   \set stmt_timeout 120s

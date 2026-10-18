@@ -36,6 +36,8 @@ create table pgmb.config (
     clients         int  not null,
     jobs            int  not null,
     plan_iterations int  not null check (plan_iterations > 0),
+    analyze_iterations int not null check (analyze_iterations > 0),
+    analyze_timing  boolean not null,      -- one more EXPLAIN ANALYZE with TIMING ON, whose plan is kept
     pgbench_bin     text not null,
     outdir          text not null
 );
@@ -96,7 +98,8 @@ return array['perf', 'planning', 'errors', 'consistency', 'checksum', 'analyze']
 create procedure pgmb.configure(p_preset text, p_label text, p_data_scale text, p_conn_scale text,
                                 p_write_ratio text, p_scope text, p_tags text, p_topics text,
                                 p_mode text, p_protocol text, p_duration text, p_warmup text,
-                                p_plan_iterations text, p_pgbench text, p_outdir text)
+                                p_plan_iterations text, p_analyze_iterations text, p_analyze_timing text,
+                                p_pgbench text, p_outdir text)
 language plpgsql as $$
 declare
     p  pgmb.preset;
@@ -132,7 +135,8 @@ begin
             coalesce(nullif(p_mode, ''), p.mode), p_protocol,
             coalesce(nullif(p_duration, '')::int, p.duration),
             coalesce(nullif(p_warmup, '')::int, p.warmup),
-            cl, least(cl, 16), p_plan_iterations::int, p_pgbench, p_outdir);
+            cl, least(cl, 16), p_plan_iterations::int, p_analyze_iterations::int,
+            p_analyze_timing in ('1', 'on', 'true'), p_pgbench, p_outdir);
 end $$;
 
 create function pgmb.exec_enabled(p_tag text) returns boolean stable language sql
@@ -438,6 +442,7 @@ create procedure pgmb.run_check(p_run bigint, p_kind text, p_id text) language p
 declare
     t      pgmb.test;
     iters  int := (select plan_iterations from pgmb.config);
+    c      pgmb.config;
     j      json;
     times  double precision[];
     shapes text[];
@@ -475,25 +480,40 @@ begin
                 insert into pgmb_results.checks values (p_run, t.id, 'planning', false, sqlstate || ': ' || sqlerrm);
         end;
 
-    -- analyze: one EXPLAIN ANALYZE per test, for row estimates and node memory.
-    -- Writers are executed too; like everything else here they are rolled back.
+    -- analyze: EXPLAIN ANALYZE with every counter, analyze_iterations times with
+    -- TIMING OFF (their Execution Time is kept), then, with analyze_timing, once
+    -- more with TIMING ON. Every execution runs in its own subtransaction with
+    -- the same seed, so each sees the same data and the same parameters; writers
+    -- are executed too and rolled back. The plan of the last execution is kept:
+    -- the warmest one, or the one with node timings.
     elsif p_kind = 'analyze' then
-        begin
-            perform setseed(0.42);
-            parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
-            foreach stmt in array parts.pre loop execute stmt; end loop;
-            execute 'explain (analyze, format json, timing off, buffers off, summary off) ' || parts.query into j;
-            raise exception using errcode = 'PGMB0';
-        exception
-            when sqlstate 'PGMB0' then
-                select * into st from pgmb.plan_stats((j->0->'Plan')::jsonb);
-                insert into pgmb_results.explain_stats
-                values (p_run, t.id, st.nodes, st.max_qerror, st.worst_node, st.worst_est, st.worst_actual,
-                        (j->0->'Plan'->>'Plan Rows')::double precision, (j->0->'Plan'->>'Actual Rows')::double precision,
-                        st.mem_kb, st.disk_kb, pgmb.plan_shape((j->0->'Plan')::jsonb));
-            when others then
-                insert into pgmb_results.checks values (p_run, t.id, 'analyze', false, sqlstate || ': ' || sqlerrm);
-        end;
+        select * into strict c from pgmb.config;
+        times := '{}';
+        for i in 1 .. c.analyze_iterations + c.analyze_timing::int loop
+            begin
+                perform setseed(0.42);
+                parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
+                foreach stmt in array parts.pre loop execute stmt; end loop;
+                execute format('explain (analyze, format json, timing %s, buffers, wal, settings, memory, serialize, summary) ',
+                               case when i > c.analyze_iterations then 'on' else 'off' end)
+                        || parts.query into j;
+                raise exception using errcode = 'PGMB0';
+            exception
+                when sqlstate 'PGMB0' then
+                    if i <= c.analyze_iterations then
+                        times := times || (j->0->>'Execution Time')::double precision;
+                    end if;
+                when others then
+                    insert into pgmb_results.checks values (p_run, t.id, 'analyze', false, sqlstate || ': ' || sqlerrm);
+                    return;
+            end;
+        end loop;
+        select * into st from pgmb.plan_stats((j->0->'Plan')::jsonb);
+        insert into pgmb_results.explain_stats
+        values (p_run, t.id, st.nodes, st.max_qerror, st.worst_node, st.worst_est, st.worst_actual,
+                (j->0->'Plan'->>'Plan Rows')::double precision, (j->0->'Plan'->>'Actual Rows')::double precision,
+                st.mem_kb, st.disk_kb, pgmb.plan_shape((j->0->'Plan')::jsonb));
+        insert into pgmb_results.explain_plan values (p_run, t.id, j->0, times);
 
     -- errors: the statement must fail with the expected SQLSTATE
     elsif p_kind = 'errors' then

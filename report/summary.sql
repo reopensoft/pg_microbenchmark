@@ -80,6 +80,14 @@ select test_id as test, nodes, round(max_qerror::numeric, 1) as q_error, worst_n
 from pgmb_results.explain_stats where run_id = :run_id order by max_qerror desc nulls last, test_id;
 
 \echo
+\echo ==== EXPLAIN ANALYZE, the 25 slowest (ms: best and median of the TIMING OFF executions; counters from one execution)
+select test_id as test, iterations as n, round(exec_ms_min::numeric, 3) as ms_min, round(exec_ms_med::numeric, 3) as ms_med,
+       round(plan_ms::numeric, 3) as plan_ms, round(rows_processed::numeric) as rows, round(rows_removed::numeric) as filtered,
+       blocks_hit as hit, blocks_read as read, temp_blocks as temp, wal_bytes, workers_planned || '/' || workers_launched as workers,
+       output_kb
+from pgmb_results.explain_metrics where run_id = :run_id order by exec_ms_med desc nulls last, test_id limit 25;
+
+\echo
 \echo ==== checks
 select check_type, count(*) as tests, count(*) filter (where ok) as passed,
        count(*) filter (where not ok) as failed
@@ -117,6 +125,10 @@ from pgmb_results.latency_hist where run_id = :run_id order by test_id, bucket \
 select * from pgmb_results.planning where run_id = :run_id order by test_id \g :pgmb_f
 \set pgmb_f :outdir /run_ :run_id _explain_stats.csv
 select * from pgmb_results.explain_stats where run_id = :run_id order by test_id \g :pgmb_f
+\set pgmb_f :outdir /run_ :run_id _explain_plan.csv
+select * from pgmb_results.explain_plan where run_id = :run_id order by test_id \g :pgmb_f
+\set pgmb_f :outdir /run_ :run_id _explain_metrics.csv
+select * from pgmb_results.explain_metrics where run_id = :run_id order by test_id \g :pgmb_f
 \set pgmb_f :outdir /run_ :run_id _resource.csv
 select * from pgmb_results.resource where run_id = :run_id order by test_id \g :pgmb_f
 \set pgmb_f :outdir /run_ :run_id _checks.csv

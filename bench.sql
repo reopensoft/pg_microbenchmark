@@ -29,7 +29,7 @@ select set_config('pgmb.only', :'only', false) \gset pgmb_ignore_
 select set_config('pgmb.client_checks', :'client_checks', false) \gset pgmb_ignore_
 call pgmb.configure(:'preset', :'label', :'data_scale', :'conn_scale', :'write_ratio', :'scope',
                     :'tags', :'topics', :'mode', :'protocol', :'duration', :'warmup',
-                    :'plan_iterations', :'pgbench', :'outdir');
+                    :'plan_iterations', :'analyze_iterations', :'analyze_timing', :'pgbench', :'outdir');
 
 -- Test catalog
 \ir data/tables.sql

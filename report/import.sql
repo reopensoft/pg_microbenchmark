@@ -20,6 +20,11 @@ create temp table i_latency (like pgmb_results.latency) on commit drop;
 create temp table i_latency_hist (like pgmb_results.latency_hist) on commit drop;
 create temp table i_explain_stats (like pgmb_results.explain_stats) on commit drop;
 create temp table i_resource (like pgmb_results.resource) on commit drop;
+create temp table i_explain_plan (like pgmb_results.explain_plan) on commit drop;
+
+-- exports made before explain_plan existed have no file for it
+\set pgmb_plan_file :dir /export_explain_plan.csv
+\set pgmb_has_plans `test -f :'pgmb_plan_file' && echo t || echo f`
 
 -- \copy does not expand psql variables, so the commands are generated
 \pset format unaligned
@@ -27,7 +32,8 @@ create temp table i_resource (like pgmb_results.resource) on commit drop;
 \set pgmb_imp :dir /_import.psql
 select format('\copy i_%s from ''%s/export_%s.csv'' with (format csv, header)', t, :'dir', t)
 from unnest(array['run', 'ddl_step', 'pgbench_raw', 'perf', 'planning', 'checks', 'latency', 'latency_hist',
-                  'explain_stats', 'resource']) t \g :pgmb_imp
+                  'explain_stats', 'resource']
+            || case when :'pgmb_has_plans' = 't' then array['explain_plan'] else '{}'::text[] end) t \g :pgmb_imp
 \pset format aligned
 \pset tuples_only off
 \i :pgmb_imp
@@ -55,6 +61,7 @@ update i_latency set run_id = :new_run_id;
 update i_latency_hist set run_id = :new_run_id;
 update i_explain_stats set run_id = :new_run_id;
 update i_resource set run_id = :new_run_id;
+update i_explain_plan set run_id = :new_run_id;
 insert into pgmb_results.ddl_step select * from i_ddl_step;
 insert into pgmb_results.pgbench_raw (run_id, test_id, clients, cmd, output)
 select :new_run_id, test_id, clients, cmd, output from i_pgbench_raw;
@@ -65,5 +72,6 @@ insert into pgmb_results.latency select * from i_latency;
 insert into pgmb_results.latency_hist select * from i_latency_hist;
 insert into pgmb_results.explain_stats select * from i_explain_stats;
 insert into pgmb_results.resource select * from i_resource;
+insert into pgmb_results.explain_plan select * from i_explain_plan;
 commit;
 \echo imported as run :new_run_id

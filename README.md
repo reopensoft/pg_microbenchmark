@@ -150,6 +150,8 @@ All are passed with `-v name=value`.
 | `gucs` | *(empty)* | extra server settings for the run, `name=value,name=value` (no spaces inside a value). Set in the benchmark session, passed to every pgbench connection, recorded in `pgmb_results.run.settings` |
 | `stmt_timeout` | `120s` | `statement_timeout` for the DML phase: it limits each in-database check on its own (a check that runs longer is recorded as failed and the run goes on) and every statement pgbench sends; `0` disables it |
 | `plan_iterations` | `20` | EXPLAIN repetitions per test in the planning check |
+| `analyze_iterations` | `3` | `EXPLAIN ANALYZE` executions per test in the analyze check, with `TIMING OFF`; their median `Execution Time` is the figure compared between runs |
+| `analyze_timing` | `0` | `1` adds one more execution with `TIMING ON`, whose plan (with the time spent in each node) is the one kept |
 | `client_checks` | `1` | how result hashes (`consistency`, `checksum`) are computed. `1`: psql sends every statement unchanged and hashes the rows that come back. `0`: inside the server, which has to wrap the statement in a subquery and so plans a slightly different query |
 | `rls_role` | *(empty)* | role for the row level security tests; empty means they are not registered ([details](#row-level-security)) |
 | `intarray` | `0` | `1` installs the `intarray` extension and registers the tests that use it ([details](#intarray)) |
@@ -207,7 +209,7 @@ Every test carries tags. Six of them name a measurement:
 | `errors` | in-database | the statement must fail with the expected SQLSTATE |
 | `consistency` | in-database | equivalent formulations must return identical rows |
 | `checksum` | in-database | an order-independent checksum of the whole result, to compare the same test between two runs |
-| `analyze` | in-database | one `EXPLAIN ANALYZE` per test: the worst ratio between estimated and actual rows over the plan nodes (q-error), and what the nodes kept in memory or wrote to disk |
+| `analyze` | in-database | `EXPLAIN ANALYZE` with every counter (buffers, WAL, serialization, planner memory, settings), `analyze_iterations` times on the same parameters: execution time, the work done (rows, blocks, spills, WAL, workers), the worst ratio between estimated and actual rows over the plan nodes (q-error), and the full plan |
 
 The others describe the test: `oltp`, `olap`, `locking`, `concurrency`, and
 `needs_data` for tests that are skipped when the tables are empty.
@@ -487,7 +489,7 @@ and give the serial baseline on any server.
 | Script | Shows |
 |---|---|
 | `report/summary.sql` | one run in full; `-v run_id=N`, default: the last run. Printed at the end of every run |
-| `report/compare.sql` | two runs side by side: settings that differ, DDL steps, performance, planning, estimates, temporary files, result checksums; `-v a=N -v b=M`, default: the last two |
+| `report/compare.sql` | two runs side by side: settings that differ, DDL steps, performance, planning, estimates, what changed in `EXPLAIN ANALYZE` and why, temporary files, result checksums; `-v a=N -v b=M`, default: the last two |
 | `report/export.sql`, `report/import.sql` | move one run to another database's results, to compare runs of two servers; `export.sql -v run_id=N` writes `out/export_*.csv`, `import.sql -v dir=out` loads them as a new run |
 | `report/histogram.sql` | latency histograms with counts and cumulative percentages; `-v run_id=N -v test=<regex>` |
 | `report/explain.sql` | `EXPLAIN` of every matching test with its parameters bound; `-v test=<regex> -v analyze=1 -v gucs=...` |
@@ -507,6 +509,31 @@ tests made of several statements it executes the preparing ones (`SET LOCAL`,
 `CREATE TEMP TABLE`) and explains each query; a cursor is explained as its
 query with `LIMIT` set to the size of its first `FETCH`.
 
+### Why a test got slower
+
+The `EXPLAIN ANALYZE` section of `compare.sql` lists the tests tagged `analyze`
+whose time, plan or work changed, with the reason in the `changed` column:
+
+| Flag | Meaning |
+|---|---|
+| `PLAN` | another plan shape (node types, join strategies, relations, indexes) |
+| `rows`, `filtered` | the nodes produced, or read and threw away, a different number of rows |
+| `blocks`, `reads` | more or fewer buffers touched; more of them read from the OS |
+| `spill` | sorts, hashes or tuple stores went to (or left) temporary files |
+| `wal` | the statement wrote a different amount of WAL |
+| `workers` | a different number of parallel workers was launched |
+| `heap_fetches`, `lossy` | index-only scans visited the heap; bitmap scans became lossy |
+| `output` | the result is a different size |
+| `planning` | planning time changed by more than 50 % |
+
+A time ratio with an empty `changed` column means the same plan did the same
+work at a different speed: look at the executor or the server, not at the
+planner. The counters come from one execution on the same parameters and are
+exact; the time is the median of `analyze_iterations` executions and carries
+noise, so small ratios on fast tests mean little. The full plans are in
+`pgmb_results.explain_plan`, the figures in the view
+`pgmb_results.explain_metrics`.
+
 ## Result tables
 
 | Table | Content |
@@ -519,6 +546,8 @@ query with `LIMIT` set to the size of its first `FETCH`.
 | `pgmb_results.planning` | planning time (min, median, max), planner memory, number of distinct plan shapes |
 | `pgmb_results.checks` | outcome of error and consistency checks, result checksums |
 | `pgmb_results.explain_stats` | per test tagged `analyze`: q-error, the node it comes from, rows estimated and returned, memory and disk use of the plan nodes |
+| `pgmb_results.explain_plan` | per test tagged `analyze`: the full plan of the last `EXPLAIN ANALYZE` (top-level query, `FORMAT JSON`, every counter; node timings only with `analyze_timing=1`) and the `Execution Time` of each `TIMING OFF` execution |
+| `pgmb_results.explain_metrics` | view: figures from `explain_plan` that can be compared between runs: execution time (best, median), planning time and memory, rows processed and filtered out, blocks hit, read, dirtied, written, temporary blocks, WAL, heap fetches, lossy bitmap blocks, workers planned and launched, output size |
 | `pgmb_results.resource` | temporary files, temporary bytes and WAL written during each test's pgbench run (isolated mode) |
 | `pgmb_results.pgbench_raw` | pgbench command lines and their full output |
 
