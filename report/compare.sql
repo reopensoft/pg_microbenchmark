@@ -80,14 +80,15 @@ select coalesce(x.test_id, y.test_id) as test,
        round(x.exec_ms_med::numeric, 3) as ms_a, round(y.exec_ms_med::numeric, 3) as ms_b,
        round((x.exec_ms_med / nullif(y.exec_ms_med, 0))::numeric, 2) as ratio,
        nullif(concat_ws(', ',
-           case when sx.plan_shape is distinct from sy.plan_shape then 'PLAN' end,
+           case when x.test_id is null then 'only in b' when y.test_id is null then 'only in a' end,
+           case when sx.plan_shape <> sy.plan_shape then 'PLAN' end,
            case when pgmb_results.differs(x.rows_processed, y.rows_processed) then 'rows' end,
            case when pgmb_results.differs(x.rows_removed, y.rows_removed) then 'filtered' end,
            case when pgmb_results.differs(x.blocks_hit + x.blocks_read, y.blocks_hit + y.blocks_read) then 'blocks' end,
            case when pgmb_results.differs(x.blocks_read, y.blocks_read) then 'reads' end,
            case when pgmb_results.differs(x.temp_blocks, y.temp_blocks) then 'spill' end,
            case when pgmb_results.differs(x.wal_bytes, y.wal_bytes) then 'wal' end,
-           case when x.workers_launched is distinct from y.workers_launched then 'workers' end,
+           case when x.workers_launched <> y.workers_launched then 'workers' end,
            case when pgmb_results.differs(x.heap_fetches, y.heap_fetches) then 'heap_fetches' end,
            case when pgmb_results.differs(x.lossy_blocks, y.lossy_blocks) then 'lossy' end,
            case when pgmb_results.differs(x.output_kb, y.output_kb) then 'output' end,
@@ -100,13 +101,14 @@ from (select * from pgmb_results.explain_metrics where run_id = :a) x
 full join (select * from pgmb_results.explain_metrics where run_id = :b) y using (test_id)
 left join pgmb_results.explain_stats sx on sx.run_id = :a and sx.test_id = x.test_id
 left join pgmb_results.explain_stats sy on sy.run_id = :b and sy.test_id = y.test_id
-where pgmb_results.differs(x.exec_ms_med, y.exec_ms_med)
-   or sx.plan_shape is distinct from sy.plan_shape
+where x.test_id is null or y.test_id is null
+   or pgmb_results.differs(x.exec_ms_med, y.exec_ms_med, 0.1, 0.01)
+   or sx.plan_shape <> sy.plan_shape
    or pgmb_results.differs(x.rows_processed, y.rows_processed)
    or pgmb_results.differs(x.blocks_hit + x.blocks_read, y.blocks_hit + y.blocks_read)
    or pgmb_results.differs(x.temp_blocks, y.temp_blocks)
    or pgmb_results.differs(x.wal_bytes, y.wal_bytes)
-   or x.workers_launched is distinct from y.workers_launched
+   or x.workers_launched <> y.workers_launched
 order by ratio nulls last, test;
 
 \echo

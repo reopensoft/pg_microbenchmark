@@ -170,15 +170,15 @@ create view pgmb_results.explain_metrics as
 select e.run_id, e.test_id, m.*
 from pgmb_results.explain_plan e, pgmb_results.plan_metrics(e.plan, e.exec_ms) m;
 
--- Two figures differ by more than the tolerance (default 10 %); values below 1
--- count as 1, so that 0 against 1 block is no difference. NULL on one side only
--- is a difference, NULL on both is not.
+-- Two figures differ by more than the tolerance (default 10 %); values below
+-- the floor count as the floor, so that 0 against 1 block is no difference.
+-- NULL on either side (a run that did not collect the figure) is no difference.
 create or replace function pgmb_results.differs(a double precision, b double precision,
-                                                tol double precision default 0.1) returns boolean
+                                                tol double precision default 0.1,
+                                                floor double precision default 1) returns boolean
 immutable language sql
-return case when a is null and b is null then false
-            when a is null or b is null then true
-            else greatest(a, 1) / greatest(b, 1) not between 1 / (1 + tol) and 1 + tol end;
+return a is not null and b is not null
+       and greatest(a, floor) / greatest(b, floor) not between 1 / (1 + tol) and 1 + tol;
 
 -- what one test's pgbench run cost outside the query results (isolated mode)
 create table if not exists pgmb_results.resource (
