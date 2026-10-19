@@ -138,6 +138,27 @@ def fetch_run(args, run_id):
     return d
 
 
+def fetch_test_sql(args, test_ids):
+    """Fetch the registered SQL for a list of test ids -> {test_id: sql}."""
+    if not test_ids:
+        return {}
+    ids = ",".join("'" + t.replace("'", "''") + "'" for t in test_ids)
+    _, rows = query(args, f"select id, sql from pgmb.test where id in ({ids})")
+    return {a: b for a, b in rows}
+
+
+def top_diff(compare, n=10):
+    """(gains, regressions): lists of (test_id, tps_a, tps_b, ratio b/a)."""
+    pairs = []
+    for tid in set(compare["a_perf"]) & set(compare["b_perf"]):
+        ra = compare["a_perf"][tid]["tps"]
+        rb = compare["b_perf"][tid]["tps"]
+        if ra and rb:
+            pairs.append((tid, ra, rb, rb / ra))
+    pairs.sort(key=lambda p: p[3], reverse=True)
+    return pairs[:n], list(reversed(pairs[-n:]))
+
+
 # ---------------------------------------------------------------------------
 # html helpers
 # ---------------------------------------------------------------------------
@@ -280,6 +301,14 @@ summary { cursor: pointer; color: var(--accent); font-size: 13px;
 .pill.fail { background: rgba(248,81,73,.15); color: var(--bad); }
 tr.failrow { background: rgba(248,81,73,.08); }
 tr.failrow:hover { background: rgba(248,81,73,.15); }
+.sqlblock { background: var(--bg2); border: 1px solid var(--line);
+            border-radius: 8px; padding: 10px 14px; margin: 8px 0 18px;
+            font-family: var(--mono); font-size: 12.5px; line-height: 1.45;
+            white-space: pre-wrap; word-break: break-word; color: var(--fg); }
+.sqlblock .tid { display: block; color: var(--accent); font-weight: 600;
+                 margin-bottom: 6px; font-size: 13px; }
+.sqlblock .stats { display: block; color: var(--fg3); margin-top: 6px;
+                   font-size: 11.5px; }
 footer { margin-top: 40px; color: var(--fg3); font-size: 12px;
          border-top: 1px solid var(--line); padding-top: 14px; }
 """
@@ -597,6 +626,31 @@ def compare_ddl_section(da, db):
     return "".join(out)
 
 
+def compare_sql_section(compare, args, n=10):
+    """SQL of the tests with the largest TPS differences between a and b."""
+    gains, regs = top_diff(compare, n)
+    if not gains and not regs:
+        return ""
+    out = [section_header(f"SQL of the most differing tests (top {n} by TPS ratio)")]
+    sqls = fetch_test_sql(args, [p[0] for p in gains + regs])
+    for label, pairs, better_high in (("Gains (b faster)", gains, True),
+                                      ("Regressions (b slower)", regs, False)):
+        if not pairs:
+            continue
+        out.append(f'<h3 style="margin:18px 0 4px;font-size:14px;'
+                   f'color:var(--{"good" if better_high else "bad"})">{label}</h3>')
+        for tid, ra, rb, ratio in pairs:
+            sql = sqls.get(tid)
+            if sql is None:
+                continue
+            out.append(
+                f'<div class="sqlblock"><span class="tid">{esc(tid)}'
+                f' <span class="dim">· ratio b/a {ratio:.2f}</span></span>'
+                f'{esc(sql)}'
+                f'<span class="stats">a: {ra:,.1f} tps · b: {rb:,.1f} tps</span></div>')
+    return "".join(out)
+
+
 def compare_checks_section(da, db):
     ca = {(c["test_id"], c["type"]): c["ok"] for c in da["checks"]}
     cb = {(c["test_id"], c["type"]): c["ok"] for c in db["checks"]}
@@ -637,7 +691,7 @@ def meta_line(d):
     return " · ".join(bits)
 
 
-def build_page(d, compare=None):
+def build_page(d, compare=None, args=None):
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     if compare:
         title = f"pg_microbenchmark — run {compare['b']['meta']['run_id']} vs {compare['a']['meta']['run_id']}"
@@ -650,6 +704,7 @@ def build_page(d, compare=None):
                 + compare_ddl_section(compare["a"], compare["b"])
                 + perf_section(compare["b"], compare)
                 + planning_section(compare["b"], compare)
+                + compare_sql_section(compare, args)
                 + compare_checks_section(compare["a"], compare["b"]))
     else:
         m = d["meta"]
@@ -728,7 +783,7 @@ def main():
                    "b_perf": {p["test_id"]: p for p in db["perf"]},
                    "a_pl": {p["test_id"]: p for p in da["planning"]},
                    "b_pl": {p["test_id"]: p for p in db["planning"]}}
-        page = build_page(db, compare)
+        page = build_page(db, compare, args)
         out = args.out or REPO / f"report_compare_{a}_{b}.html"
     else:
         run_id = args.run or latest_run(args)
