@@ -1,2 +1,11 @@
+# generated pgbench scripts, logs and CSV exports (also per-instance subdirectories)
 out/*
 !out/.gitkeep
+
+# Python bytecode (run_bench.py, report_html.py)
+__pycache__/
+*.pyc
+
+# captured benchmark output and generated HTML reports
+results_*.log
+report_run*.html
