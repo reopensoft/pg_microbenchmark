@@ -17,6 +17,15 @@
 \echo ==== runs
 select * from pgmb_results.run_overview where run_id in (:a, :b) order by run_id = :b;
 
+-- result checksums are comparable only for the same data and the same way of computing them
+select (x.config->>'data_scale') is distinct from (y.config->>'data_scale') as pgmb_scale_differs,
+       x.config->>'data_scale' as pgmb_scale_a, y.config->>'data_scale' as pgmb_scale_b
+from pgmb_results.run x, pgmb_results.run y where x.run_id = :a and y.run_id = :b \gset
+\if :pgmb_scale_differs
+    \echo
+    \echo *** data_scale differs (a = :pgmb_scale_a, b = :pgmb_scale_b): result checksums of the two runs cannot be compared ***
+\endif
+
 \echo
 \echo ==== settings that differ
 select coalesce(x.key, y.key) as setting, x.value as a, y.value as b

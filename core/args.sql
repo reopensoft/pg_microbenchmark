@@ -88,6 +88,10 @@
 \else
   \set only ''
 \endif
+\if :{?client_checks}
+\else
+  \set client_checks 1
+\endif
 \if :{?skip_ddl}
 \else
   \set skip_ddl 0

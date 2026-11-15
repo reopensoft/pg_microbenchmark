@@ -337,6 +337,74 @@ create function pgmb.plan_stats(p jsonb, out nodes int, out max_qerror double pr
     from x
 $$;
 
+create function pgmb.client_checks() returns boolean stable language sql
+return coalesce(current_setting('pgmb.client_checks', true), '1') = '1';
+
+-- Members of a consistency group whose hashes differ are marked as failed.
+create procedure pgmb.finish_consistency(p_run bigint) language sql
+begin atomic
+    update pgmb_results.checks c
+    set ok = false, detail = c.detail || ' (differs within group ' || g.equiv || ')'
+    from pgmb.test tt,
+         (select t2.equiv
+          from pgmb_results.checks c2 join pgmb.test t2 on t2.id = c2.test_id
+          where c2.run_id = p_run and c2.check_type = 'consistency'
+          group by t2.equiv having count(distinct c2.detail) > 1) g
+    where c.run_id = p_run and c.check_type = 'consistency' and c.ok and tt.id = c.test_id and tt.equiv = g.equiv;
+end;
+
+-- psql commands that compute the consistency and checksum hashes on the client
+-- side. Each statement is sent exactly as written (simple protocol, top level,
+-- no wrapper), its rows are written to a file, read back as lines of text and
+-- hashed in sorted order. SET LOCAL and temporary tables of the test are
+-- executed first; everything is rolled back afterwards.
+create function pgmb.check_commands() returns setof text volatile language plpgsql as $$
+declare
+    t     pgmb.test;
+    parts record;
+    stmt  text;
+    typ   text;
+    f     text := (select outdir from pgmb.config) || '/_check_rows.txt';
+begin
+    if not pgmb.client_checks() then
+        return;
+    end if;
+    for t in select * from pgmb.selected
+             where kind = 'read' and expect_error is null and (pgmb.script_parts(sql)).query is not null
+               and (('consistency' = any (tags) and equiv is not null and pgmb.exec_enabled('consistency'))
+                    or ('checksum' = any (tags) and pgmb.exec_enabled('checksum')))
+             order by ord loop
+        typ := case when 'consistency' = any (t.tags) and t.equiv is not null and pgmb.exec_enabled('consistency')
+                    then 'consistency' else 'checksum' end;
+        begin
+            perform setseed(0.42);       -- same parameter values for every member of a group, and in every run
+            parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
+        exception when others then
+            return next format('insert into pgmb_results.checks values (:run_id, %L, %L, false, %L);',
+                               t.id, typ, sqlstate || ': ' || sqlerrm);
+            continue;
+        end;
+        return next 'begin;';
+        foreach stmt in array parts.pre loop
+            return next stmt || ';';
+        end loop;
+        return next parts.query;
+        return next format('\g (format=unaligned tuples_only=on null=~NULL~) %s', f);
+        return next '\set pgmb_err :ERROR';
+        return next 'rollback;';
+        return next '\if :pgmb_err';
+        return next format('insert into pgmb_results.checks values (:run_id, %L, %L, false, '
+                           ':''LAST_ERROR_SQLSTATE'' || '': '' || :''LAST_ERROR_MESSAGE'');', t.id, typ);
+        return next '\else';
+        return next 'truncate pgmb_rows;';
+        return next format('\copy pgmb_rows from ''%s'' with (format csv, delimiter E''\x02'', quote E''\x01'')', f);
+        return next format('insert into pgmb_results.checks select :run_id, %L, %L, true, '
+                           'md5(coalesce(string_agg(line, chr(10) order by line), '''')) || '' rows='' || count(*) from pgmb_rows;',
+                           t.id, typ);
+        return next '\endif';
+    end loop;
+end $$;
+
 create procedure pgmb.run_checks(p_run bigint) language plpgsql as $$
 declare
     t      pgmb.test;
@@ -430,8 +498,14 @@ begin
         end loop;
     end if;
 
+    -- consistency and checksum hash the rows a statement returns. By default that is
+    -- done on the client side (pgmb.check_commands): the statement is sent
+    -- unchanged, as an application would send it. The loops below are the
+    -- in-database variant (-v client_checks=0), which has to wrap the statement
+    -- in a subquery and therefore plans a slightly different query.
+
     -- consistency: all members of an equivalence group must return the same set of rows
-    if pgmb.exec_enabled('consistency') then
+    if pgmb.exec_enabled('consistency') and not pgmb.client_checks() then
         for t in select * from pgmb.selected
                  where 'consistency' = any (tags) and equiv is not null and kind = 'read'
                    and (pgmb.script_parts(sql)).query is not null
@@ -451,20 +525,13 @@ begin
             end;
         end loop;
 
-        update pgmb_results.checks c
-        set ok = false, detail = c.detail || ' (differs within group ' || g.equiv || ')'
-        from pgmb.test tt,
-             (select t2.equiv
-              from pgmb_results.checks c2 join pgmb.test t2 on t2.id = c2.test_id
-              where c2.run_id = p_run and c2.check_type = 'consistency'
-              group by t2.equiv having count(distinct c2.detail) > 1) g
-        where c.run_id = p_run and c.check_type = 'consistency' and tt.id = c.test_id and tt.equiv = g.equiv;
+        call pgmb.finish_consistency(p_run);
     end if;
 
     -- checksum: hash of the whole result, independent of row order, to compare
     -- the same test between two runs (report/compare.sql). Tests that are in a
     -- consistency group already have one.
-    if pgmb.exec_enabled('checksum') then
+    if pgmb.exec_enabled('checksum') and not pgmb.client_checks() then
         for t in select * from pgmb.selected
                  where 'checksum' = any (tags) and kind = 'read' and expect_error is null
                    and (pgmb.script_parts(sql)).query is not null
