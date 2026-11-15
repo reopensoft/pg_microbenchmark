@@ -350,10 +350,10 @@ begin
                  where 'planning' = any (tags) and expect_error is null
                    and (pgmb.script_parts(sql)).query is not null
                  order by ord loop
-            parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
             -- the block is always left through an exception, so that SET LOCAL
             -- and temporary tables of the test are rolled back
             begin
+                parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
                 foreach stmt in array parts.pre loop execute stmt; end loop;
                 times := '{}'; shapes := '{}'; mem := 0;
                 for i in 1 .. iters loop

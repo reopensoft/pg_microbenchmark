@@ -60,6 +60,7 @@ call pgmb.configure(:'preset', :'label', :'data_scale', :'conn_scale', :'write_r
 \ir topics/cte_collapse.sql
 \ir topics/cte_parallel.sql
 \ir topics/cte_alternatives.sql
+\ir topics/cte_edge.sql
 \ir topics/pcte.sql
 \ir topics/materialized.sql
 \ir topics/distinct.sql
