@@ -31,7 +31,7 @@ with u as (update g_parent set val = val + 1 where id = :id returning id, val)
 select pg_notify('pgmb_events', id::text || ':' || val::text) from u$q$,
     kind => 'write', setup => '\set id random(1, :n_g_parent)');
 
-call pgmb.reg('cte.notify_after_insert_returning', '{perf,planning,oltp,concurrency}', $q$
+call pgmb.reg('cte.notify_after_insert_returning', '{perf,planning,oltp,concurrency,needs_data}', $q$
 with ins as (insert into g_child (parent_id, seq, kind, amount, ts, note)
              values (:id, 0, 0, 1.00, now(), 'notify') returning id, parent_id)
 select pg_notify('pgmb_events', format('child %s of %s', id, parent_id)) from ins$q$,

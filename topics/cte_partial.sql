@@ -83,7 +83,7 @@ call pgmb.reg('cte.partial_limit_pushdown_skips_error_row', '{perf,planning,oltp
 with c as (select id from g_narrow where id <= 1000 and (1 / (id - 500)) is not null)
 select count(*) from (select id from c where id > 600 and id < 610 limit 5) s$q$);
 -- materialized: every row of the CTE is produced before the outer condition is applied
-call pgmb.reg('cte.err_partial_limit_no_pushdown_materialized', '{errors}', $q$
+call pgmb.reg('cte.err_partial_limit_no_pushdown_materialized', '{errors,needs_data}', $q$
 with c as materialized (select id from g_narrow where id <= 1000 and (1 / (id - 500)) is not null)
 select count(*) from (select id from c where id > 600 and id < 610 limit 5) s$q$, expect_error => '22012');
 
@@ -306,7 +306,7 @@ call pgmb.reg('cte.partial_case_branch_not_taken_per_row', '{perf,planning,oltp}
     'with c as materialized (' || :'pgmb_bomb1' || $q$)
 select d.id, case when d.id < 0 then (select count(*) from c) else -1 end from g_dim d where d.id = 1$q$);
 
-call pgmb.reg('cte.err_partial_case_branch_taken', '{errors}',
+call pgmb.reg('cte.err_partial_case_branch_taken', '{errors,needs_data}',
     'with c as materialized (' || :'pgmb_bomb1' || $q$)
 select d.id, case when d.id > 0 then (select count(*) from c) else -1 end from g_dim d where d.id = 1$q$, expect_error => '22012');
 

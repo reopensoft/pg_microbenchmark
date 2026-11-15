@@ -12,7 +12,7 @@
 -- would fail with a unique violation. Keys are i * 1024 + :client_id, which
 -- keeps the clients (up to 1024) apart.
 ------------------------------------------------------------------------------
-call pgmb.reg('cte.dml_merge_returning', '{perf,planning,oltp}', $q$
+call pgmb.reg('cte.dml_merge_returning', '{perf,planning,oltp,needs_data}', $q$
 with m as (
     merge into g_dml t using (select :id::bigint * 1024 + :client_id as id) s on t.id = s.id
     when matched and t.qty % 10 = 0 then delete
@@ -24,7 +24,7 @@ select action, id, qty from m$q$,
     kind => 'write', setup => '\set id random(:n_g_dml + 1, 2 * :n_g_dml)');
 
 -- one MERGE, all three actions, told apart with merge_action()
-call pgmb.reg('cte.dml_merge_actions_counted', '{perf,planning,oltp}', $q$
+call pgmb.reg('cte.dml_merge_actions_counted', '{perf,planning,oltp,needs_data}', $q$
 with m as (
     merge into g_dml t using (select i::bigint * 1024 + :client_id as id from generate_series(:id, :id + 49) i) s on t.id = s.id
     when matched and t.qty % 10 = 0 then delete
@@ -36,7 +36,7 @@ select action, count(*) as n from m group by action order by action$q$,
     kind => 'write', setup => '\set id random(:n_g_dml + 1, 2 * :n_g_dml - 50)');
 
 -- old and new row versions per action (RETURNING old/new, PostgreSQL 18)
-call pgmb.reg('cte.dml_merge_returning_old_new', '{perf,planning,oltp}', $q$
+call pgmb.reg('cte.dml_merge_returning_old_new', '{perf,planning,oltp,needs_data}', $q$
 with m as (
     merge into g_dml t using (select i::bigint * 1024 + :client_id as id from generate_series(:id, :id + 9) i) s on t.id = s.id
     when matched then update set qty = t.qty + 1
@@ -172,14 +172,14 @@ with u as (update g_dml_audit set qty = coalesce(qty, 0) + 1
 select count(*) from u$q$,
     kind => 'write', setup => '\set id random(1, :n_g_dml)');
 
-call pgmb.reg('cte.err_dml_check_violation', '{errors}',
+call pgmb.reg('cte.err_dml_check_violation', '{errors,needs_data}',
     $q$with u as (update g_dml set qty = -1 where id = 1 returning id) select * from u$q$, expect_error => '23514');
-call pgmb.reg('cte.err_dml_unique_violation', '{errors}',
+call pgmb.reg('cte.err_dml_unique_violation', '{errors,needs_data}',
     $q$with u as (update g_dml set code = 'c2' where id = 1 returning id) select * from u$q$, expect_error => '23505');
-call pgmb.reg('cte.err_dml_foreign_key_violation', '{errors}',
+call pgmb.reg('cte.err_dml_foreign_key_violation', '{errors,needs_data}',
     $q$with u as (update g_dml set dim_id = 0 where id = 1 returning id) select * from u$q$, expect_error => '23503');
 -- the violation is raised although nothing reads the CTE
-call pgmb.reg('cte.err_dml_check_violation_unreferenced', '{errors}',
+call pgmb.reg('cte.err_dml_check_violation_unreferenced', '{errors,needs_data}',
     $q$with u as (update g_dml set qty = -1 where id = 1) select 1$q$, expect_error => '23514');
 
 ------------------------------------------------------------------------------
@@ -275,14 +275,14 @@ insert into g_dml select * from d$q$,
 ------------------------------------------------------------------------------
 -- ON CONFLICT
 ------------------------------------------------------------------------------
-call pgmb.reg('cte.dml_on_conflict_do_nothing', '{perf,planning,oltp}', $q$
+call pgmb.reg('cte.dml_on_conflict_do_nothing', '{perf,planning,oltp,needs_data}', $q$
 with ins as (insert into g_dml (id, dim_id, code, qty, val, updated_at)
              values (:id, 1 + (:id % :n_g_dim), 'c' || :id, 1, 0, now())
              on conflict do nothing returning id)
 select count(*) as inserted from ins$q$,
     kind => 'write', setup => '\set id random(1, 2 * :n_g_dml)');
 
-call pgmb.reg('cte.dml_on_conflict_do_update', '{perf,planning,oltp}', $q$
+call pgmb.reg('cte.dml_on_conflict_do_update', '{perf,planning,oltp,needs_data}', $q$
 with ups as (insert into g_dml (id, dim_id, code, qty, val, updated_at)
              values (:id, 1 + (:id % :n_g_dim), 'c' || :id, 1, 0, now())
              on conflict (id) do update set qty = g_dml.qty + excluded.qty, updated_at = excluded.updated_at
@@ -290,7 +290,7 @@ with ups as (insert into g_dml (id, dim_id, code, qty, val, updated_at)
 select id, qty, inserted from ups$q$,
     kind => 'write', setup => '\set id random(1, 2 * :n_g_dml)');
 
-call pgmb.reg('cte.dml_on_conflict_do_update_batch', '{perf,planning}', $q$
+call pgmb.reg('cte.dml_on_conflict_do_update_batch', '{perf,planning,needs_data}', $q$
 with ups as (insert into g_dml (id, dim_id, code, qty, val, updated_at)
              select i, 1 + (i % :n_g_dim), 'c' || i, 1, 0, now() from generate_series(:id, :id + 99) i
              on conflict (id) do update set qty = g_dml.qty + 1
@@ -299,7 +299,7 @@ select count(*) filter (where inserted) as inserted, count(*) filter (where not 
     kind => 'write', setup => '\set id random(1, 2 * :n_g_dml - 100)');
 
 -- DO UPDATE with a WHERE that rejects the row: nothing is returned for it
-call pgmb.reg('cte.dml_on_conflict_do_update_where', '{perf,planning,oltp}', $q$
+call pgmb.reg('cte.dml_on_conflict_do_update_where', '{perf,planning,oltp,needs_data}', $q$
 with ups as (insert into g_dml (id, dim_id, code, qty, val, updated_at)
              select i, 1 + (i % :n_g_dim), 'c' || i, 1, 0, now() from generate_series(:id, :id + 9) i
              on conflict (id) do update set qty = g_dml.qty + 1 where g_dml.qty % 2 = 0
@@ -308,7 +308,7 @@ select count(*) from ups$q$,
     kind => 'write', setup => '\set id random(1, :n_g_dml)');
 
 -- conflict on the UNIQUE constraint instead of the primary key
-call pgmb.reg('cte.dml_on_conflict_on_unique_constraint', '{perf,planning,oltp}', $q$
+call pgmb.reg('cte.dml_on_conflict_on_unique_constraint', '{perf,planning,oltp,needs_data}', $q$
 with ups as (insert into g_dml (id, dim_id, code, qty, val, updated_at)
              values (:k, 1 + (:id % :n_g_dim), 'c' || :k, 1, 0, now())
              on conflict on constraint g_dml_code_uq do update set val = g_dml.val + 1

@@ -12,7 +12,7 @@ create table pgmb.preset (
     data_scale   double precision not null,
     base_clients int  not null,
     write_ratio  double precision not null,
-    duration     int  not null,            -- seconds per pgbench invocation
+    duration     int  not null,            -- seconds per pgbench invocation; 0 = one transaction per script
     warmup       int  not null,
     mode         text not null check (mode in ('isolated', 'mixed')),
     tags         text[] not null default '{}'
@@ -22,7 +22,7 @@ create table pgmb.config (
     one             boolean primary key default true check (one),
     preset          text not null,
     label           text,
-    data_scale      double precision not null check (data_scale > 0),
+    data_scale      double precision not null check (data_scale >= 0),  -- 0 = tables stay empty
     conn_scale      double precision not null check (conn_scale > 0),
     write_ratio     double precision not null check (write_ratio between 0 and 1),
     scope           text not null check (scope in ('rw', 'readonly', 'writeonly', 'createonly')),
@@ -31,7 +31,7 @@ create table pgmb.config (
     topics          text[] not null,
     mode            text not null check (mode in ('isolated', 'mixed')),
     protocol        text not null check (protocol in ('simple', 'extended', 'prepared')),
-    duration        int  not null check (duration > 0),
+    duration        int  not null check (duration >= 0),               -- 0 = one transaction per script
     warmup          int  not null check (warmup >= 0),
     clients         int  not null,
     jobs            int  not null,
@@ -148,6 +148,8 @@ where t.phase = 'dml'
   and (cardinality(c.exec_tags) = 0 or t.tags && c.exec_tags)
   -- -v only=<regex> narrows the run to matching test ids
   and (coalesce(current_setting('pgmb.only', true), '') = '' or t.id ~ current_setting('pgmb.only', true))
+  -- tests that need rows to mean anything are left out when the tables are empty
+  and not (c.data_scale = 0 and 'needs_data' = any (t.tags))
   -- a tag named optin_<something> keeps a test out of every run that does not ask for that tag
   and not exists (select from unnest(t.tags) x where x like 'optin\_%' and x <> all (c.sel_tags))
   and (t.kind = 'read' and c.write_ratio < 1 or t.kind = 'write' and c.write_ratio > 0);
@@ -200,7 +202,11 @@ return least(hi, lo + floor((hi - lo + 1) * power(random(), 1 + 4 * s))::bigint)
 create view pgmb.ddl_plan as
 select t.ord, t.id,
        array_position(array['schema', 'load', 'index', 'constraint', 'maintenance'], t.kind) as stage,
-       pgmb.subst_n(t.sql) as sql
+       -- data_scale = 0: load steps generate no rows. Row counts used elsewhere
+       -- (:n_<table> in tests) keep their minimum, so parameter expressions stay valid.
+       case when t.kind = 'load' and (select data_scale from pgmb.config) = 0
+            then regexp_replace(t.sql, '(?<!:):n_\w+', '0', 'g')
+            else pgmb.subst_n(t.sql) end as sql
 from pgmb.test t
 where t.phase = 'ddl';
 
@@ -408,13 +414,18 @@ begin
                  where 'errors' = any (tags) and expect_error is not null order by ord loop
             begin
                 execute pgmb.bind(t.sql, t.setup);
-                insert into pgmb_results.checks
-                values (p_run, t.id, 'errors', false, 'expected ' || t.expect_error || ', got no error');
-            exception when others then
-                insert into pgmb_results.checks
-                values (p_run, t.id, 'errors', sqlstate = t.expect_error,
-                        case when sqlstate = t.expect_error then sqlstate
-                             else 'expected ' || t.expect_error || ', got ' || sqlstate || ': ' || sqlerrm end);
+                -- no error: leave through an exception anyway, so that whatever
+                -- the statement did (an index, a row) is rolled back
+                raise exception using errcode = 'PGMB0';
+            exception
+                when sqlstate 'PGMB0' then
+                    insert into pgmb_results.checks
+                    values (p_run, t.id, 'errors', false, 'expected ' || t.expect_error || ', got no error');
+                when others then
+                    insert into pgmb_results.checks
+                    values (p_run, t.id, 'errors', sqlstate = t.expect_error,
+                            case when sqlstate = t.expect_error then sqlstate
+                                 else 'expected ' || t.expect_error || ', got ' || sqlstate || ': ' || sqlerrm end);
             end;
         end loop;
     end if;
@@ -568,8 +579,9 @@ begin
             -- temporary files and WAL written while the test runs
             return next 'select temp_files as pgmb_tf0, temp_bytes as pgmb_tb0, pg_current_wal_insert_lsn() as pgmb_lsn0 '
                         'from pg_stat_database where datname = current_database() \gset';
-            return next format('\set pgmb_out `%s -T %s -P %s --log --log-prefix=%s -f %s 2>&1`',
-                               base, c.duration, c.duration, logp, r.path);
+            return next format('\set pgmb_out `%s %s --log --log-prefix=%s -f %s 2>&1`',
+                               base, case when c.duration = 0 then '-t 1' else format('-T %s -P %s', c.duration, c.duration) end,
+                               logp, r.path);
             -- the pgbench backends report their statistics when they exit
             return next format('select pg_sleep(0.02) \gset pgmb_ignore_');
             return next format('insert into pgmb_results.resource select :run_id, %L, temp_files - :pgmb_tf0, temp_bytes - :pgmb_tb0, '
@@ -596,7 +608,7 @@ begin
         end if;
         logp := format('%s/log_r%s_mixed', c.outdir, current_setting('pgmb.run_id'));
         return next format('\set pgmb_out `%s -T %s -P %s --log --log-prefix=%s %s`',
-                           base, c.duration, least(c.duration, 5), logp, files);
+                           base, greatest(c.duration, 1), least(greatest(c.duration, 1), 5), logp, files);
         return next format('insert into pgmb_results.pgbench_raw (run_id, test_id, clients, cmd, output) '
                            'values (:run_id, null, %s, %L, :''pgmb_out'');',
                            c.clients, format('%s -T %s %s', base, c.duration, files));

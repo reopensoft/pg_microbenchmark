@@ -191,9 +191,9 @@ with v(x) as (values (1)),
 select v.x + f.x + l.x + n.x from v, f, l, n$q$);
 
 -- a scalar subquery over a CTE with two rows is an error at run time
-call pgmb.reg('cte.err_edge_scalar_subquery_two_rows', '{errors}',
+call pgmb.reg('cte.err_edge_scalar_subquery_two_rows', '{errors,needs_data}',
     $q$with c as (select id from g_parent where id in (1, 2)) select (select id from c)$q$, expect_error => '21000');
-call pgmb.reg('cte.err_edge_scalar_subquery_two_rows_materialized', '{errors}',
+call pgmb.reg('cte.err_edge_scalar_subquery_two_rows_materialized', '{errors,needs_data}',
     $q$with c as materialized (select id from g_parent where id in (1, 2)) select (select id from c)$q$, expect_error => '21000');
 -- ... but not when the subquery is never evaluated
 call pgmb.reg('cte.edge_scalar_subquery_two_rows_not_evaluated', '{perf,planning,analyze,oltp}', $q$
@@ -399,7 +399,7 @@ select count(*), count(n), count(distinct dup), sum(arr[1]), sum((doc->>'grp')::
 ------------------------------------------------------------------------------
 -- R05. many references to one CTE (100 scalar subqueries)
 ------------------------------------------------------------------------------
-select format($f$call pgmb.reg('cte.edge_refs_100_%1$s_%2$s', '{perf,planning,analyze,consistency}', %3$L, setup => '\set id random(1, :n_g_parent - 100)', equiv => 'cte.edge_refs_%1$s')$f$, lbl, form,
+select format($f$call pgmb.reg('cte.edge_refs_100_%1$s_%2$s', '{perf,planning,analyze,consistency}', %3$L, setup => '\set id random(1, greatest(1, :n_g_parent - 100))', equiv => 'cte.edge_refs_%1$s')$f$, lbl, form,
               format('with c as %s(select id, val from g_parent where %s) select ', kw, cond)
               || (select string_agg(format('coalesce((select sum(val) from c where id %% 100 = %s), 0)', i), ' + ' order by i) from generate_series(0, 99) i))
 from (values ('empty_cte', 'id < 0'), ('one_row_cte', 'id = :id'), ('100_row_cte', 'id between :id and :id + 99')) v(lbl, cond),
@@ -409,7 +409,7 @@ from (values ('empty_cte', 'id < 0'), ('one_row_cte', 'id = :id'), ('100_row_cte
 call pgmb.reg('cte.edge_refs_100_100_row_cte_single_pass', '{perf,planning,analyze,consistency}', $q$
 with c as (select id, val from g_parent where id between :id and :id + 99)
 select coalesce(sum(val), 0) from c$q$,
-    setup => '\set id random(1, :n_g_parent - 100)', equiv => 'cte.edge_refs_100_row_cte');
+    setup => '\set id random(1, greatest(1, :n_g_parent - 100))', equiv => 'cte.edge_refs_100_row_cte');
 
 ------------------------------------------------------------------------------
 -- R06. a nested loop that rescans the CTE once per outer row
@@ -419,19 +419,19 @@ select coalesce(sum(val), 0) from c$q$,
 \set pgmb_nl 'begin;\nset local enable_hashjoin = off;\nset local enable_mergejoin = off;\nset local enable_material = off;\nset local enable_memoize = off;\n'
 \set pgmb_end ';\ncommit;'
 
-select format($f$call pgmb.reg('cte.edge_rescan_%1$s_outer_rows_in_memory', '{perf,planning,analyze,consistency}', %2$L, setup => '\set id random(1, :n_g_narrow - 2000)', equiv => 'cte.edge_rescan_%1$s')$f$, n,
+select format($f$call pgmb.reg('cte.edge_rescan_%1$s_outer_rows_in_memory', '{perf,planning,analyze,consistency}', %2$L, setup => '\set id random(1, greatest(1, :n_g_narrow - 2000))', equiv => 'cte.edge_rescan_%1$s')$f$, n,
               :'pgmb_nl' || format($q$with inner_side as materialized (select id, k_100 from g_narrow where id between :id and :id + 999)
 select count(i.id) from g_narrow o left join inner_side i on i.k_100 = o.k_100 where o.id between :id + 1000 and :id + %s$q$, 999 + n) || :'pgmb_end')
 from (values (10), (100), (1000)) v(n) \gexec
 
 -- the rescanned CTE lives in a temporary file
-select format($f$call pgmb.reg('cte.edge_rescan_%1$s_outer_rows_spilled', '{perf,planning,analyze,consistency}', %2$L, setup => '\set id random(1, :n_g_narrow - 2000)', equiv => 'cte.edge_rescan_%1$s')$f$, n,
+select format($f$call pgmb.reg('cte.edge_rescan_%1$s_outer_rows_spilled', '{perf,planning,analyze,consistency}', %2$L, setup => '\set id random(1, greatest(1, :n_g_narrow - 2000))', equiv => 'cte.edge_rescan_%1$s')$f$, n,
               :'pgmb_nl' || E'set local work_mem = ''64kB'';\n' || format($q$with inner_side as materialized (select id, k_100, pad || pad as pad2 from g_narrow where id between :id and :id + 999)
 select count(i.id) from g_narrow o left join inner_side i on i.k_100 = o.k_100 where o.id between :id + 1000 and :id + %s$q$, 999 + n) || :'pgmb_end')
 from (values (10), (100), (1000)) v(n) \gexec
 
 -- the same join left to the planner
-select format($f$call pgmb.reg('cte.edge_rescan_%1$s_outer_rows_planner_choice', '{perf,planning,analyze,consistency}', %2$L, setup => '\set id random(1, :n_g_narrow - 2000)', equiv => 'cte.edge_rescan_%1$s')$f$, n,
+select format($f$call pgmb.reg('cte.edge_rescan_%1$s_outer_rows_planner_choice', '{perf,planning,analyze,consistency}', %2$L, setup => '\set id random(1, greatest(1, :n_g_narrow - 2000))', equiv => 'cte.edge_rescan_%1$s')$f$, n,
               format($q$with inner_side as materialized (select id, k_100 from g_narrow where id between :id and :id + 999)
 select count(i.id) from g_narrow o left join inner_side i on i.k_100 = o.k_100 where o.id between :id + 1000 and :id + %s$q$, 999 + n))
 from (values (10), (100), (1000)) v(n) \gexec
@@ -697,12 +697,12 @@ select array(select id from g_parent where id between :id and :id + 199 order by
     setup => '\set id random(1, :n_g_parent)', equiv => 'cte.edge_order_top');
 
 -- ordered aggregates and window functions name their own order
-call pgmb.reg('cte.edge_order_in_aggregate_and_window', '{perf,planning,analyze,consistency}', $q$
+call pgmb.reg('cte.edge_order_in_aggregate_and_window', '{perf,planning,analyze,consistency,needs_data}', $q$
 with c as materialized (select id, grp, val from g_parent where id between :id and :id + 199 order by val desc)
 select array_agg(id order by grp desc, val, id) from c$q$,
     setup => '\set id random(1, :n_g_parent)', equiv => 'cte.edge_order_agg');
 
-call pgmb.reg('cte.edge_order_by_window_row_number', '{perf,planning,analyze,consistency}', $q$
+call pgmb.reg('cte.edge_order_by_window_row_number', '{perf,planning,analyze,consistency,needs_data}', $q$
 with c as materialized (select id, grp, val from g_parent where id between :id and :id + 199 order by val desc),
      numbered as (select id, row_number() over (order by grp desc, val, id) as rn from c)
 select array(select id from numbered order by rn) as array_agg$q$,

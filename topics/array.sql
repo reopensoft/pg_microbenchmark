@@ -137,20 +137,20 @@ call pgmb.reg('array.agg_50k_passed_only', '{perf,planning}', $q$
 select arr_count(array_agg(id)) from g_narrow where id <= 50000$q$);
 
 -- the function walks the array: FOREACH, subscripting, unnest in SQL
-call pgmb.reg('array.agg_50k_plpgsql_foreach', '{perf,planning,consistency}', $q$
+call pgmb.reg('array.agg_50k_plpgsql_foreach', '{perf,planning,consistency,needs_data}', $q$
 select arr_sum_foreach(array_agg(id)) from g_narrow where id <= 50000$q$, equiv => 'array.agg_sum');
 
-call pgmb.reg('array.agg_50k_plpgsql_subscript', '{perf,planning,consistency}', $q$
+call pgmb.reg('array.agg_50k_plpgsql_subscript', '{perf,planning,consistency,needs_data}', $q$
 select arr_sum_subscript(array_agg(id)) from g_narrow where id <= 50000$q$, equiv => 'array.agg_sum');
 
-call pgmb.reg('array.agg_50k_sql_unnest', '{perf,planning,consistency}', $q$
+call pgmb.reg('array.agg_50k_sql_unnest', '{perf,planning,consistency,needs_data}', $q$
 select arr_sum_sql(array_agg(id)) from g_narrow where id <= 50000$q$, equiv => 'array.agg_sum');
 
-call pgmb.reg('array.agg_50k_no_array', '{perf,planning,consistency}', $q$
+call pgmb.reg('array.agg_50k_no_array', '{perf,planning,consistency,needs_data}', $q$
 select sum(id)::bigint from g_narrow where id <= 50000$q$, equiv => 'array.agg_sum');
 
 -- the function rebuilds the array element by element
-call pgmb.reg('array.agg_5k_plpgsql_append_loop', '{perf,planning}', $q$
+call pgmb.reg('array.agg_5k_plpgsql_append_loop', '{perf,planning,needs_data}', $q$
 select arr_append_loop(array_agg(id)) from g_narrow where id <= 5000$q$);
 
 -- built-in functions over a large aggregated array

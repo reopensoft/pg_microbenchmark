@@ -41,7 +41,7 @@ commit;$q$,
     kind => 'write', setup => '\set id random(:n_g_dml / 2 + 1, :n_g_dml - 1)');
 
 -- the same swap against the non-deferrable constraint of g_dml fails on the first row
-call pgmb.reg('cte.err_defer_unique_swap_not_deferrable', '{errors}', $q$
+call pgmb.reg('cte.err_defer_unique_swap_not_deferrable', '{errors,needs_data}', $q$
 with a as (update g_dml set code = (select code from g_dml where id = 2) where id = 1 returning id),
      b as (update g_dml set code = (select code from g_dml where id = 1) where id = 2 returning id)
 select (select count(*) from a) + (select count(*) from b)$q$, expect_error => '23505');
@@ -63,7 +63,7 @@ commit;$q$,
 -- a foreign key is checked after the statement even when not deferrable: the
 -- child may be inserted before its parent by an earlier CTE. Rolled back to
 -- keep the tree; the ids are per client.
-call pgmb.reg('cte.defer_fk_child_before_parent_same_statement', '{perf,oltp}', $q$
+call pgmb.reg('cte.defer_fk_child_before_parent_same_statement', '{perf,oltp,needs_data}', $q$
 begin;
 with child as (insert into g_tree values (:p + 1, :p, 1, 0, 'child') returning id),
      parent as (insert into g_tree values (:p, 1, 0, 0, 'parent') returning id)

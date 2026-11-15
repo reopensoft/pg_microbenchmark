@@ -101,7 +101,7 @@ call pgmb.reg('index.update_gin', '{perf,planning,oltp}', $q$
 update g_array set tags = array['tag' || :v::text, 'tag' || (:v + 1)::text] where id = :id$q$,
     kind => 'write', setup => E'\\set id random(1, :n_g_array)\n\\set v random(0, 48)');
 
-call pgmb.reg('index.err_unique_violation', '{errors}',
+call pgmb.reg('index.err_unique_violation', '{errors,needs_data}',
     $q$insert into g_dim (id, code, category, name) select id, code, category, name from g_dim where id = 1$q$,
     expect_error => '23505');
 

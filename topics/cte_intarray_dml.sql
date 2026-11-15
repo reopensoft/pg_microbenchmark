@@ -292,15 +292,15 @@ select pgmb_intarray.sort(null_array) is null as sort_of_null_array,
        cardinality(null_element) as cardinality_of_null_element
 from c$q$));
 
-call pgmb.reg('cte.err_intarray_null_element_sort_in_cte', '{errors}',
+call pgmb.reg('cte.err_intarray_null_element_sort_in_cte', '{errors,needs_data}',
     pgmb.ia($q$with c as (select pgmb_intarray.sort(arr_nulls) as s from g_intarr) select max(s[1]) from c$q$), expect_error => '22004');
-call pgmb.reg('cte.err_intarray_null_element_uniq_in_cte', '{errors}',
+call pgmb.reg('cte.err_intarray_null_element_uniq_in_cte', '{errors,needs_data}',
     pgmb.ia($q$with c as (select pgmb_intarray.uniq(arr_nulls) as s from g_intarr) select max(s[1]) from c$q$), expect_error => '22004');
-call pgmb.reg('cte.err_intarray_null_element_append_in_cte', '{errors}',
+call pgmb.reg('cte.err_intarray_null_element_append_in_cte', '{errors,needs_data}',
     pgmb.ia($q$with c as (select arr_nulls operator(pgmb_intarray.+) 1 as s from g_intarr) select max(s[1]) from c$q$), expect_error => '22004');
-call pgmb.reg('cte.err_intarray_null_element_remove_in_cte', '{errors}',
+call pgmb.reg('cte.err_intarray_null_element_remove_in_cte', '{errors,needs_data}',
     pgmb.ia($q$with c as (select arr_nulls operator(pgmb_intarray.-) 1 as s from g_intarr) select max(s[1]) from c$q$), expect_error => '22004');
-call pgmb.reg('cte.err_intarray_null_element_union_in_cte', '{errors}',
+call pgmb.reg('cte.err_intarray_null_element_union_in_cte', '{errors,needs_data}',
     pgmb.ia($q$with c as (select arr_nulls operator(pgmb_intarray.|) arr5 as s from g_intarr) select max(s[1]) from c$q$), expect_error => '22004');
 call pgmb.reg('cte.err_intarray_null_element_literal', '{errors}',
     pgmb.ia($q$with c(a) as (select array[null::integer]) select pgmb_intarray.sort(a) from c$q$), expect_error => '22004');
@@ -374,7 +374,7 @@ with c as (select id, pgmb_intarray.sort(arr_nulls) as s from g_intarr)
 select count(*) from c$q$));
 
 -- materialized, the column is computed for every row: the statement fails
-call pgmb.reg('cte.err_intarray_error_column_unused_materialized', '{errors}',
+call pgmb.reg('cte.err_intarray_error_column_unused_materialized', '{errors,needs_data}',
     pgmb.ia($q$with c as materialized (select id, pgmb_intarray.sort(arr_nulls) as s from g_intarr) select count(*) from c$q$), expect_error => '22004');
 
 -- the reader stops before the first bad row (id 1 is clean, id 2 is not)
@@ -387,15 +387,15 @@ call pgmb.reg('cte.intarray_error_behind_limit_materialized', '{perf,planning,ol
 with c as materialized (select id, pgmb_intarray.sort(arr_nulls) as s from g_intarr where id >= 1 order by id)
 select s from c limit 1$q$));
 
-call pgmb.reg('cte.err_intarray_error_within_limit', '{errors}',
+call pgmb.reg('cte.err_intarray_error_within_limit', '{errors,needs_data}',
     pgmb.ia($q$with c as (select id, pgmb_intarray.sort(arr_nulls) as s from g_intarr where id >= 1 order by id) select s from c limit 2$q$), expect_error => '22004');
 
 -- sorting by the computed column needs all of them before the first row
-call pgmb.reg('cte.err_intarray_error_before_limit_sorted_by_result', '{errors}',
+call pgmb.reg('cte.err_intarray_error_before_limit_sorted_by_result', '{errors,needs_data}',
     pgmb.ia($q$with c as (select id, pgmb_intarray.sort(arr_nulls) as s from g_intarr) select s from c order by s limit 1$q$), expect_error => '22004');
 
 -- two readers force materialization, one of them never touches the column
-call pgmb.reg('cte.err_intarray_error_two_readers_one_ignores_column', '{errors}',
+call pgmb.reg('cte.err_intarray_error_two_readers_one_ignores_column', '{errors,needs_data}',
     pgmb.ia($q$with c as (select id, pgmb_intarray.sort(arr_nulls) as s from g_intarr) select (select count(*) from c), (select max(id) from c)$q$), expect_error => '22004');
 
 call pgmb.reg('cte.intarray_error_exists_stops_first', '{perf,planning,oltp}', pgmb.ia($q$
@@ -414,7 +414,7 @@ with recursive r(n, a) as (
 select count(*) from r$q$), expect_error => '22004');
 
 -- walking the table row by row: id 1 is clean, id 2 stops the recursion with an error
-call pgmb.reg('cte.err_intarray_recursive_walk_hits_null_row', '{errors}', pgmb.ia($q$
+call pgmb.reg('cte.err_intarray_recursive_walk_hits_null_row', '{errors,needs_data}', pgmb.ia($q$
 with recursive r(id, s) as (
     select id, pgmb_intarray.sort(arr_nulls) from g_intarr where id = 1
     union all
@@ -453,17 +453,17 @@ select count(*) as steps_until_all_20_values_seen, max(pgmb_intarray.icount(seen
 -- an error in a writer: the whole statement is undone
 ------------------------------------------------------------------------------
 -- the first writer has already updated its row when the second one fails
-call pgmb.reg('cte.err_intarray_dml_second_writer_fails', '{errors}', pgmb.ia($q$
+call pgmb.reg('cte.err_intarray_dml_second_writer_fails', '{errors,needs_data}', pgmb.ia($q$
 with ok as (update g_ia_dml set n = n + 1 where id = 1 returning id),
      bad as (update g_ia_dml set a_plain = pgmb_intarray.sort(array_append(a_plain, null)) where id = 2 returning id)
 select (select count(*) from ok), (select count(*) from bad)$q$), expect_error => '22004');
 
-call pgmb.reg('cte.err_intarray_dml_error_in_returning', '{errors}', pgmb.ia($q$
+call pgmb.reg('cte.err_intarray_dml_error_in_returning', '{errors,needs_data}', pgmb.ia($q$
 with u as (update g_ia_dml set n = n + 1 where id = 1
            returning pgmb_intarray.sort(array_append(a_plain, null)) as s)
 select count(*) from u$q$), expect_error => '22004');
 
-call pgmb.reg('cte.err_intarray_dml_error_in_reader', '{errors}', pgmb.ia($q$
+call pgmb.reg('cte.err_intarray_dml_error_in_reader', '{errors,needs_data}', pgmb.ia($q$
 with u as (update g_ia_dml set n = n + 1 where id = 1 returning a_plain)
 select pgmb_intarray.sort(array_append(a_plain, null)) from u$q$), expect_error => '22004');
 

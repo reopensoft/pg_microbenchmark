@@ -299,7 +299,7 @@ with u as (update g_parent set val = val + 1 where id = :id returning val)
 select (select val from g_parent where id = :id) as seen_by_select, (select val from u) as returned$q$,
     kind => 'write', setup => '\set id random(1, :n_g_parent)');
 
-call pgmb.reg('cte.mix_dml_insert_not_visible_to_sibling', '{perf,planning,oltp}', $q$
+call pgmb.reg('cte.mix_dml_insert_not_visible_to_sibling', '{perf,planning,oltp,needs_data}', $q$
 with ins as (insert into g_child (parent_id, seq, kind, amount, ts, note)
              values (:id, 0, 0, 1.00, now(), 'mix') returning id),
      seen as (select count(*) as n from g_child where id in (select id from ins))

@@ -243,11 +243,11 @@ select percentile_disc(0.5) within group (order by pad desc) from g_narrow where
     setup => '\set id random(1, :n_g_narrow)');
 
 -- median two ways; results must agree
-call pgmb.reg('sort.agg_median_ordered_set', '{perf,planning,consistency}', $q$
+call pgmb.reg('sort.agg_median_ordered_set', '{perf,planning,consistency,needs_data}', $q$
 select percentile_disc(0.5) within group (order by k_10k) from g_narrow where id between :id and :id + 9999$q$,
     setup => '\set id random(1, :n_g_narrow / 2)', equiv => 'sort.median');
 
-call pgmb.reg('sort.agg_median_by_offset', '{perf,planning,consistency}', $q$
+call pgmb.reg('sort.agg_median_by_offset', '{perf,planning,consistency,needs_data}', $q$
 select k_10k from g_narrow where id between :id and :id + 9999 order by k_10k
 offset (select (count(*) - 1) / 2 from g_narrow where id between :id and :id + 9999) limit 1$q$,
     setup => '\set id random(1, :n_g_narrow / 2)', equiv => 'sort.median');

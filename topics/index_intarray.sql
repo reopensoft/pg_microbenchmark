@@ -88,9 +88,9 @@ select count(*) from g_intarr where arr1 @> array[:v]$q$,
     setup => '\set v random(0, 99)', equiv => 'index.intarray_numranges_1');
 
 -- what the options refuse (the transaction of the check is rolled back)
-call pgmb.reg('index.err_intarray_gist_numranges_1_on_10_elements', '{errors}',
+call pgmb.reg('index.err_intarray_gist_numranges_1_on_10_elements', '{errors,needs_data}',
     pgmb.ia($q$create index g_intarr_err on g_intarr using gist (arr10_sorted pgmb_intarray.gist__int_ops (numranges = 1))$q$), expect_error => '54000');
-call pgmb.reg('index.err_intarray_gist_numranges_10_on_100_elements', '{errors}',
+call pgmb.reg('index.err_intarray_gist_numranges_10_on_100_elements', '{errors,needs_data}',
     pgmb.ia($q$create index g_intarr_err on g_intarr using gist (arr100 pgmb_intarray.gist__int_ops (numranges = 10))$q$), expect_error => '54000');
 call pgmb.reg('index.err_intarray_gist_numranges_out_of_bounds', '{errors}',
     pgmb.ia($q$create index g_intarr_err on g_intarr using gist (arr10 pgmb_intarray.gist__int_ops (numranges = 253))$q$), expect_error => '22023');

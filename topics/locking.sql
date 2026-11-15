@@ -30,12 +30,12 @@ call pgmb.reg('locking.update_non_key', '{perf,planning,locking,concurrency,oltp
 update g_parent set val = val + 1 where id = :id$q$,
     kind => 'write', setup => '\set id random_zipfian(1, :n_g_parent, 1.1)');
 
-call pgmb.reg('locking.fk_insert_child', '{perf,planning,locking,concurrency,oltp}', $q$
+call pgmb.reg('locking.fk_insert_child', '{perf,planning,locking,concurrency,oltp,needs_data}', $q$
 insert into g_child (parent_id, seq, kind, amount, ts, note) values (:id, 0, 0, 1.00, now(), 'lock')$q$,
     kind => 'write', setup => '\set id random_zipfian(1, :n_g_parent, 1.1)');
 
 -- FK insert against a parent row that another session holds FOR NO KEY UPDATE: must not block
-call pgmb.reg('locking.fk_insert_under_no_key_update', '{perf,locking,concurrency,oltp}', $q$
+call pgmb.reg('locking.fk_insert_under_no_key_update', '{perf,locking,concurrency,oltp,needs_data}', $q$
 begin;
 select val from g_parent where id = :id for no key update;
 insert into g_child (parent_id, seq, kind, amount, ts, note) values (:id, 0, 0, 1.00, now(), 'lock');
