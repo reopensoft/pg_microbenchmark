@@ -351,6 +351,6 @@ call pgmb.reg('cte.error_function_behind_limit', '{perf,planning,oltp}', $q$
 with c as (select id, raise_if(id > 50) as r from g_parent where id <= 100 order by id)
 select id from c limit 5$q$);
 
-call pgmb.reg('cte.err_error_function_reached', '{errors}',
+call pgmb.reg('cte.err_error_function_reached', '{errors,needs_data}',
     $q$with c as (select id, raise_if(id > 50) as r from g_parent where id <= 100) select count(*) from c$q$,
     expect_error => 'P0001');

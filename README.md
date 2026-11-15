@@ -51,7 +51,7 @@ nothing to install.
 |---|---|
 | **Deterministic data** | values come from hash functions of the row number, never from `random()`: the same scale gives the same data on every machine |
 | **Continuous scaling** | amount of data, number of connections and write share are plain numbers |
-| **Four presets** | from a one-minute smoke test to OLTP and OLAP workloads |
+| **Five presets** | from a three-minute sanity check on empty tables to OLTP and OLAP workloads |
 | **Tagged tests** | run one topic, one tag, or one test by regular expression |
 | **More than timings** | plan stability, expected errors, result consistency, row estimates, memory and temporary files |
 | **Comparable runs** | results accumulate in tables; one script puts two runs side by side |
@@ -62,7 +62,8 @@ Run from the repository root:
 
 ```bash
 createdb bench
-psql -X -d bench -f bench.sql -v preset=micro-benchmark
+psql -X -d bench -f bench.sql -v preset=sanity            # does everything run? (~3 min, no data)
+psql -X -d bench -f bench.sql -v preset=micro-benchmark   # first numbers on tiny data
 ```
 
 > [!WARNING]
@@ -116,12 +117,12 @@ All are passed with `-v name=value`.
 | Variable | Default | Meaning |
 |---|---|---|
 | `preset` | `mini-benchmark` | base configuration, see [Presets](#presets) |
-| `data_scale` | preset | multiplier for the amount of data (continuous) |
+| `data_scale` | preset | multiplier for the amount of data (continuous); `0` leaves the tables empty |
 | `conn_scale` | `1` | multiplier for the preset's number of connections (continuous) |
 | `write_ratio` | preset | share of write transactions, 0..1 |
 | `scope` | `rw` | `rw`, `readonly`, `writeonly`, `createonly` (DDL phase only) |
 | `mode` | preset | `isolated` (one pgbench run per test) or `mixed` (one weighted workload) |
-| `duration` | preset | seconds per pgbench run |
+| `duration` | preset | seconds per pgbench run; `0` runs every script once |
 | `warmup` | preset | seconds of unmeasured warm-up before each pgbench run |
 | `protocol` | `simple` | pgbench query mode: `simple`, `extended`, `prepared` |
 
@@ -165,6 +166,7 @@ All are passed with `-v name=value`.
 
 | Preset | data_scale | clients | write_ratio | mode | per run | tags |
 |---|---:|---:|---:|---|---:|---|
+| `sanity` | 0 | 1 | 0.5 | isolated | 1 transaction | all |
 | `micro-benchmark` | 0.01 | 1 | 0.5 | isolated | 1 s | all |
 | `mini-benchmark` | 1 | 4 | 0.5 | isolated | 3 s | all |
 | `mini-oltp` | 1 | 16 | 0.3 | mixed | 60 s | `oltp,perf` |
@@ -172,6 +174,15 @@ All are passed with `-v name=value`.
 
 `data_scale=1` is roughly 0.8 GB including indexes. Presets live in
 `presets/presets.sql`.
+
+> [!TIP]
+> `sanity` is the fastest way to find out whether everything still parses,
+> plans and runs, for example on a patched server: about three minutes for
+> the whole catalog. The tables stay empty (`data_scale=0`) and pgbench
+> executes every script once (`duration=0`), so its timings mean nothing; the
+> results go through the same tables and reports as any other run. Parameters
+> are still drawn from each table's minimum row count, and the tests that
+> need rows to mean anything (tag `needs_data`, about 60 of them) are left out.
 
 ### Scope and write ratio
 
@@ -195,7 +206,8 @@ Every test carries tags. Six of them name a measurement:
 | `checksum` | in-database | an order-independent checksum of the whole result, to compare the same test between two runs |
 | `analyze` | in-database | one `EXPLAIN ANALYZE` per test: the worst ratio between estimated and actual rows over the plan nodes (q-error), and what the nodes kept in memory or wrote to disk |
 
-The others describe the test: `oltp`, `olap`, `locking`, `concurrency`.
+The others describe the test: `oltp`, `olap`, `locking`, `concurrency`, and
+`needs_data` for tests that are skipped when the tables are empty.
 
 `-v tags=...` narrows the run. Descriptive tags select tests; measurement tags
 select both tests and which measurements run:

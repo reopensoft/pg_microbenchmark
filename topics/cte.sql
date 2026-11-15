@@ -146,7 +146,7 @@ with u as (update g_parent set val = val + 1, updated_at = now() where id = :id 
 select * from u$q$,
     kind => 'write', setup => '\set id random(1, :n_g_parent)');
 
-call pgmb.reg('cte.dml_insert_returning', '{perf,planning,oltp}', $q$
+call pgmb.reg('cte.dml_insert_returning', '{perf,planning,oltp,needs_data}', $q$
 with ins as (insert into g_child (parent_id, seq, kind, amount, ts, note)
              values (:id, 0, 1, 1.00, now(), 'cte') returning id)
 select id from ins$q$,

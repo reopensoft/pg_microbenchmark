@@ -37,9 +37,9 @@ Nowy temat to: plik w `topics/`, wiersz `\ir` w `bench.sql` i wiersz w tabeli
 | [4. Serwer i maintenance](#4-serwer-i-maintenance) | 0 | 3 | 5 |
 | [5. Konkurencja i transakcje](#5-konkurencja-i-transakcje) | 0 | 2 | 3 |
 | [6. Bezpieczeństwo](#6-bezpieczeństwo) | 0 | 3 | 0 |
-| [7. CTE — dalsze obszary](#7-cte--dalsze-obszary) | 0 | 3 | 7 |
+| [7. CTE — dalsze obszary](#7-cte--dalsze-obszary) | 0 | 4 | 6 |
 | [8. Infrastruktura benchmarku](#8-infrastruktura-benchmarku) | 0 | 1 | 8 |
-| [9. Repozytorium](#9-repozytorium) | 0 | 0 | 4 |
+| [9. Repozytorium](#9-repozytorium) | 1 | 0 | 3 |
 
 > [!TIP]
 > Najwięcej za najmniej: pozycje **P1** ze statusem 🟡. Dane, tabele i
@@ -52,7 +52,7 @@ Nowy temat to: plik w `topics/`, wiersz `\ir` w `bench.sql` i wiersz w tabeli
 | | Pr. | Temat | Co jest | Czego brakuje |
 |:---:|:---:|---|---|---|
 | ✅ | — | Tablice `integer[]` i intarray | tematy `array` (303 testy) i `index`, tabela `g_intarr`, `query_int`, klasy operatorów GIN/GiST | — |
-| ⬜ | **P1** | JSONB | tylko `jsonb_agg` w `distinct`/`sort` | `jsonb_set`/`jsonb_insert`/usuwanie, `@>` `<@` `?`, `jsonb_array_elements`, `jsonb_object_keys`, zagnieżdżenia, duże dokumenty, GIN (`jsonb_ops`, `jsonb_path_ops`), `jsonpath` |
+| ⬜ | **P1** | JSONB | tylko `jsonb_agg` w `distinct`/`sort` oraz dokumenty przechodzące przez CTE (`cte.edge_content_jsonb_*`) | `jsonb_set`/`jsonb_insert`/usuwanie, `@>` `<@` `?`, `jsonb_array_elements`, `jsonb_object_keys`, zagnieżdżenia, duże dokumenty, GIN (`jsonb_ops`, `jsonb_path_ops`), `jsonpath` |
 | ⬜ | **P1** | Full-text search | — | `to_tsvector`/`to_tsquery`/`websearch_to_tsquery`, `ts_rank`, `ts_headline`, GIN i GiST na `tsvector` |
 | ⬜ | **P2** | Typy zakresowe | — | `int4range`/`tsrange`/`numrange`, multirange, `@>` `<@` `&&` `-\|-`, GiST i SP-GiST, ograniczenia `EXCLUDE` |
 | ⬜ | **P2** | Typy geometryczne | — | `point`/`box`/`polygon`/`circle`, operatory, GiST, k-NN (`<->`) |
@@ -127,9 +127,10 @@ Nowy temat to: plik w `topics/`, wiersz `\ir` w `bench.sql` i wiersz w tabeli
 
 ## 7. CTE — dalsze obszary
 
-Temat `cte` ma ponad 1200 testów w 26 plikach. Z listy dalszych pomysłów
+Temat `cte` ma ponad 1300 testów w 27 plikach. Z listy dalszych pomysłów
 zrobione są: estymacje, cache planów, pamięć i pliki tymczasowe, rozmiar
-problemu złączeń, równoległość i porównanie z alternatywami. Zostało:
+problemu złączeń, równoległość i porównanie z alternatywami oraz przypadki
+brzegowe. Zostało:
 
 | | Pr. | Temat | Co jest | Czego brakuje |
 |:---:|:---:|---|---|---|
@@ -138,7 +139,7 @@ problemu złączeń, równoległość i porównanie z alternatywami. Zostało:
 | 🟡 | **P2** | CTE w obiektach pochodnych | widoki nad `g_events` | CTE w definicji widoku i widoku zmaterializowanego, `CREATE TABLE AS`, `INSERT ... SELECT`, `COPY (zapytanie)` |
 | ⬜ | **P2** | Memoize i Material | — | parametryzowany odczyt CTE w pętli zagnieżdżonej: Memoize, Material albo ponowny skan |
 | ⬜ | **P2** | JIT a CTE | — | ten sam koszt całkowity rozłożony inaczej przy wbudowaniu i materializacji |
-| ⬜ | **P2** | Szerokie wartości inne niż tablice | dla tablic zrobione | JSONB, długie teksty i typy złożone w buforze CTE |
+| 🟡 | **P2** | Szerokie wartości inne niż tablice | tablice; JSONB i tekst 10 kB w `cte_edge.sql` (`cte.edge_content_*`) | typy złożone, dokumenty JSONB powyżej progu TOAST, pomiar rozpakowywania w buforze CTE |
 | ⬜ | **P3** | Odwołania do całego wiersza | — | `select c from c`, `c.*`, `row_to_json(c)` — blokują przycinanie kolumn |
 | ⬜ | **P3** | WAL i replika | WAL na test jest mierzony | jedno polecenie z kilkoma zapisami kontra osobne polecenia; zapisujące CTE na serwerze zapasowym |
 | ⬜ | **P3** | Obserwowalność | — | narzut `EXPLAIN (ANALYZE, BUFFERS, WAL)`, `auto_explain`, `pg_stat_statements` |
@@ -155,14 +156,14 @@ problemu złączeń, równoległość i porównanie z alternatywami. Zostało:
 | ⬜ | **P2** | Test `temp_file_limit` | — | ustawienie wymaga superużytkownika, a benchmark ma go nie wymagać |
 | ⬜ | **P2** | Liczby testów w README | wpisane ręcznie | generowanie z katalogu albo usunięcie liczb |
 | ⬜ | **P3** | Częściowy odczyt na poziomie protokołu | modelowany kursorem | klient inny niż pgbench (`Execute` z limitem wierszy) |
-| ⬜ | **P3** | Weryfikacja na większych skalach | wszystko uruchamiane na `data_scale=0.01` | przebieg na skali 1 i 10: czasy, rozmiary, testy zależne od planu |
+| ⬜ | **P3** | Weryfikacja na większych skalach | wszystko uruchamiane na `data_scale=0.01` i w presecie `sanity` | przebieg na skali 1 i 10: czasy, rozmiary, testy zależne od planu |
 | ⬜ | **P3** | Blokada współdzielonej bazy | warunek sprawdzony tylko w pustej bazie | test na bazie z obcymi tabelami |
 
 ## 9. Repozytorium
 
 | | Pr. | Temat | Uwagi |
 |:---:|:---:|---|---|
-| ⬜ | **P1** | Pierwszy commit | w gicie jest tylko `.gitignore`; cały projekt jest nieśledzony |
+| ✅ | **P1** | Pierwszy commit | projekt jest w repozytorium |
 | ⬜ | **P1** | Licencja | brak pliku `LICENSE` |
 | ⬜ | **P2** | Status skryptów Pythona | `run_bench.py` i `report_html.py` są w katalogu, a README mówi, że benchmark potrzebuje tylko `psql` i `pgbench` — opisać je albo wyłączyć z repozytorium |
 | ⬜ | **P3** | CI | jeden przebieg `micro-benchmark` z samymi sprawdzeniami w bazie na PostgreSQL 18 |
@@ -183,5 +184,6 @@ problemu złączeń, równoległość i porównanie z alternatywami. Zostało:
 | Ustawienia serwera na przebieg, filtr po identyfikatorze, protokół na test | `-v gucs=...`, `-v only=...`, `protocol => ...` |
 | Sumy kontrolne wyników, estymacje i pamięć z `EXPLAIN ANALYZE`, pliki tymczasowe i WAL na test | tagi `checksum`, `analyze`; tabele `explain_stats`, `resource` |
 | Raport planów, porównanie dwóch przebiegów | `report/explain.sql`, `report/compare.sql` |
+| Preset `sanity`: puste tabele, jedna transakcja na test, tag `needs_data` | `presets/presets.sql` |
 
 </details>

@@ -146,35 +146,35 @@ commit;$q$,
 ------------------------------------------------------------------------------
 -- task 3: one entity's summary (a short query behind an abstraction)
 ------------------------------------------------------------------------------
-call pgmb.reg('cte.alt_lookup_direct', '{perf,planning,analyze,consistency,oltp}', $q$
+call pgmb.reg('cte.alt_lookup_direct', '{perf,planning,analyze,consistency,oltp,needs_data}', $q$
 select count(*) as n, sum(val::numeric) as total, max(ts) as last_ts from g_events where entity_id = :e$q$,
     setup => '\set e random(1, :n_g_events_entities)', equiv => 'cte.alt_lookup');
 
-call pgmb.reg('cte.alt_lookup_cte', '{perf,planning,analyze,consistency,oltp}', $q$
+call pgmb.reg('cte.alt_lookup_cte', '{perf,planning,analyze,consistency,oltp,needs_data}', $q$
 with t as (select entity_id, count(*) as n, sum(val::numeric) as total, max(ts) as last_ts from g_events group by entity_id)
 select n, total, last_ts from t where entity_id = :e$q$,
     setup => '\set e random(1, :n_g_events_entities)', equiv => 'cte.alt_lookup');
 
-call pgmb.reg('cte.alt_lookup_cte_materialized', '{perf,planning,analyze,consistency,olap}', $q$
+call pgmb.reg('cte.alt_lookup_cte_materialized', '{perf,planning,analyze,consistency,olap,needs_data}', $q$
 with t as materialized (select entity_id, count(*) as n, sum(val::numeric) as total, max(ts) as last_ts from g_events group by entity_id)
 select n, total, last_ts from t where entity_id = :e$q$,
     setup => '\set e random(1, :n_g_events_entities)', equiv => 'cte.alt_lookup');
 
-call pgmb.reg('cte.alt_lookup_subquery', '{perf,planning,analyze,consistency,oltp}', $q$
+call pgmb.reg('cte.alt_lookup_subquery', '{perf,planning,analyze,consistency,oltp,needs_data}', $q$
 select n, total, last_ts
 from (select entity_id, count(*) as n, sum(val::numeric) as total, max(ts) as last_ts from g_events group by entity_id) t
 where entity_id = :e$q$,
     setup => '\set e random(1, :n_g_events_entities)', equiv => 'cte.alt_lookup');
 
-call pgmb.reg('cte.alt_lookup_view', '{perf,planning,analyze,consistency,oltp}', $q$
+call pgmb.reg('cte.alt_lookup_view', '{perf,planning,analyze,consistency,oltp,needs_data}', $q$
 select n, total, last_ts from v_entity_totals where entity_id = :e$q$,
     setup => '\set e random(1, :n_g_events_entities)', equiv => 'cte.alt_lookup');
 
-call pgmb.reg('cte.alt_lookup_materialized_view', '{perf,planning,analyze,consistency,oltp}', $q$
+call pgmb.reg('cte.alt_lookup_materialized_view', '{perf,planning,analyze,consistency,oltp,needs_data}', $q$
 select n, total, last_ts from mv_entity_totals where entity_id = :e$q$,
     setup => '\set e random(1, :n_g_events_entities)', equiv => 'cte.alt_lookup');
 
-call pgmb.reg('cte.alt_lookup_lateral', '{perf,planning,analyze,consistency,oltp}', $q$
+call pgmb.reg('cte.alt_lookup_lateral', '{perf,planning,analyze,consistency,oltp,needs_data}', $q$
 select s.n, s.total, s.last_ts
 from (values (:e)) as ent(entity_id),
      lateral (select count(*) as n, sum(val::numeric) as total, max(ts) as last_ts from g_events ev where ev.entity_id = ent.entity_id) s$q$,

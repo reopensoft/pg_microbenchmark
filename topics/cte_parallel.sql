@@ -142,15 +142,15 @@ with a as materialized (select k_100 as k from g_narrow), b as materialized (sel
 select count(*), sum(k) from (select k from a union all select k from b union all select k from c) u$q$ || :'pgmb_end', equiv => 'cte.par_append');
 
 -- 16 partitions
-call pgmb.reg('cte.par_append_partitions_inlined', '{perf,planning,analyze,consistency,olap}', :'pgmb_par2' || $q$
+call pgmb.reg('cte.par_append_partitions_inlined', '{perf,planning,analyze,consistency,olap,needs_data}', :'pgmb_par2' || $q$
 with c as (select bucket, id from g_part where id % 3 = 0)
 select count(*), sum(bucket) from c$q$ || :'pgmb_end', equiv => 'cte.par_partitions');
 
-call pgmb.reg('cte.par_append_partitions_materialized', '{perf,planning,analyze,consistency,olap}', :'pgmb_par2' || $q$
+call pgmb.reg('cte.par_append_partitions_materialized', '{perf,planning,analyze,consistency,olap,needs_data}', :'pgmb_par2' || $q$
 with c as materialized (select bucket, id from g_part where id % 3 = 0)
 select count(*), sum(bucket) from c$q$ || :'pgmb_end', equiv => 'cte.par_partitions');
 
-call pgmb.reg('cte.par_append_partitions_partitionwise_aggregate', '{perf,planning,analyze,consistency,olap}', :'pgmb_par2' || $q$
+call pgmb.reg('cte.par_append_partitions_partitionwise_aggregate', '{perf,planning,analyze,consistency,olap,needs_data}', :'pgmb_par2' || $q$
 set local enable_partitionwise_aggregate = on;
 with c as materialized (select bucket, count(*) as n from g_part where id % 3 = 0 group by bucket)
 select sum(n), sum(bucket * n) from c$q$ || :'pgmb_end', equiv => 'cte.par_partitions');

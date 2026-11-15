@@ -246,5 +246,5 @@ call pgmb.reg('nulls.err_coalesce_type_mismatch', '{errors}',
     $q$select coalesce(k_null, 'none') from g_narrow limit 1$q$, expect_error => '22P02');
 call pgmb.reg('nulls.err_nullif_no_operator', '{errors}',
     $q$select nullif(k_null, pad) from g_narrow limit 1$q$, expect_error => '42883');
-call pgmb.reg('nulls.err_not_null_violation', '{errors}',
+call pgmb.reg('nulls.err_not_null_violation', '{errors,needs_data}',
     $q$update g_narrow set k_100 = nullif(k_100, k_100) where id = 1$q$, expect_error => '23502');

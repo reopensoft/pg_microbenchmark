@@ -211,7 +211,7 @@ call pgmb.reg('array.err_intarray_null_element_on_right', '{errors}',
     pgmb.ia($q$select array[1, 2] operator(pgmb_intarray.&&) array[null]::integer[]$q$), expect_error => '22004');
 call pgmb.reg('array.err_intarray_null_element_sort', '{errors}',
     pgmb.ia($q$select pgmb_intarray.sort(array[1, null, 0])$q$), expect_error => '22004');
-call pgmb.reg('array.err_intarray_null_element_in_table', '{errors}',
+call pgmb.reg('array.err_intarray_null_element_in_table', '{errors,needs_data}',
     pgmb.ia($q$select count(*) from g_intarr where arr_nulls operator(pgmb_intarray.@>) array[1]$q$), expect_error => '22004');
 
 -- NULL elements removed first: both operators agree again
