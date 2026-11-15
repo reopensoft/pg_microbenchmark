@@ -26,6 +26,7 @@ select to_regnamespace('pgmb_results') is null and :'shared_db' <> '1'
 \ir presets/presets.sql
 
 select set_config('pgmb.only', :'only', false) \gset pgmb_ignore_
+select set_config('pgmb.client_checks', :'client_checks', false) \gset pgmb_ignore_
 call pgmb.configure(:'preset', :'label', :'data_scale', :'conn_scale', :'write_ratio', :'scope',
                     :'tags', :'topics', :'mode', :'protocol', :'duration', :'warmup',
                     :'plan_iterations', :'pgbench', :'outdir');
@@ -101,6 +102,8 @@ from regexp_split_to_table(nullif(btrim(:'gucs'), ''), '\s*,\s*') as g(item),
 select pgmb.start_run() as run_id \gset
 select set_config('pgmb.run_id', :'run_id', false), set_config('pgmb.cat', :'cat', false) as cat \gset pgmb_
 -- staging table for pgbench's per-transaction log
+-- staging table for the rows of one statement, read back as lines of text
+create temp table pgmb_rows (line text);
 create temp table pgmb_log (client int, txno bigint, us text, script int,
                             epoch bigint, epoch_us bigint, retries int);
 select scope = 'createonly' as createonly, outdir from pgmb.config \gset
@@ -164,6 +167,19 @@ from pgmb.config;
     set statement_timeout = :'stmt_timeout';
     \echo check planning, errors, consistency
     call pgmb.run_checks(:run_id);
+
+    -- consistency and checksums on the client side: every statement is sent as
+    -- it is, and what comes back is hashed (see pgmb.check_commands)
+    \pset format unaligned
+    \pset tuples_only on
+    \set pgmb_chk :outdir /_checks.psql
+    select pgmb.check_commands() \g :pgmb_chk
+    \pset format aligned
+    \pset tuples_only off
+    \set ON_ERROR_STOP off
+    \i :pgmb_chk
+    \set ON_ERROR_STOP on
+    call pgmb.finish_consistency(:run_id);
 
     -- pgbench: write one script per test, then a driver script, then run it
     \pset format unaligned

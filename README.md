@@ -150,6 +150,7 @@ All are passed with `-v name=value`.
 | `gucs` | *(empty)* | extra server settings for the run, `name=value,name=value` (no spaces inside a value). Set in the benchmark session, passed to every pgbench connection, recorded in `pgmb_results.run.settings` |
 | `stmt_timeout` | `120s` | `statement_timeout` for the DML phase; `0` disables it |
 | `plan_iterations` | `20` | EXPLAIN repetitions per test in the planning check |
+| `client_checks` | `1` | how result hashes (`consistency`, `checksum`) are computed. `1`: psql sends every statement unchanged and hashes the rows that come back. `0`: inside the server, which has to wrap the statement in a subquery and so plans a slightly different query |
 | `rls_role` | *(empty)* | role for the row level security tests; empty means they are not registered ([details](#row-level-security)) |
 | `intarray` | `0` | `1` installs the `intarray` extension and registers the tests that use it ([details](#intarray)) |
 | `shared_db` | `0` | `1` allows the first run in a database that already holds other tables |
@@ -454,7 +455,7 @@ and give the serial baseline on any server.
 | result size | `pcte.transfer_*` (rows × bytes); add `temp_file_limit=...` to `gucs` to bound disk use |
 | many sessions | `-v tags=pcte_mix,perf -v mode=mixed -v conn_scale=N` with the `micro-benchmark` preset (1 client × N) |
 | short queries under load | `-v tags=pcte_oltp,perf -v conn_scale=N` |
-| same results in both runs | every single-statement read test stores a checksum of its whole result; `compare.sql` counts `same_result` / `DIFFERENT RESULT` and names every test that differs |
+| same results in both runs | every read test that is one query (optionally after `SET LOCAL`) stores a checksum of its whole result; the statement is sent unchanged by psql, so it takes the same path as an application's query. `compare.sql` counts `same_result` / `DIFFERENT RESULT` and names every test that differs |
 
 > [!CAUTION]
 > `-v tags=optin_bigtransfer` runs three `pcte.transfer_*` tests that write
@@ -468,8 +469,19 @@ and give the serial baseline on any server.
 |---|---|
 | `report/summary.sql` | one run in full; `-v run_id=N`, default: the last run. Printed at the end of every run |
 | `report/compare.sql` | two runs side by side: settings that differ, DDL steps, performance, planning, estimates, temporary files, result checksums; `-v a=N -v b=M`, default: the last two |
+| `report/export.sql`, `report/import.sql` | move one run to another database's results, to compare runs of two servers; `export.sql -v run_id=N` writes `out/export_*.csv`, `import.sql -v dir=out` loads them as a new run |
 | `report/histogram.sql` | latency histograms with counts and cumulative percentages; `-v run_id=N -v test=<regex>` |
 | `report/explain.sql` | `EXPLAIN` of every matching test with its parameters bound; `-v test=<regex> -v analyze=1 -v gucs=...` |
+
+To compare two servers (for example a patched build against master), run the
+benchmark on each with the same `data_scale`, export the run on one, copy the
+files, and import it on the other:
+
+```bash
+psql -X -p 5442 -d bench -f report/export.sql                 # last run of the other server
+psql -X -p 5441 -d bench -f report/import.sql                 # prints the new run id
+psql -X -p 5441 -d bench -f report/compare.sql -v a=<imported> -v b=<local run>
+```
 
 `explain.sql` runs every test inside a transaction that is rolled back. For
 tests made of several statements it executes the preparing ones (`SET LOCAL`,
