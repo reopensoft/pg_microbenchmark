@@ -72,6 +72,7 @@ call pgmb.configure(:'preset', :'label', :'data_scale', :'conn_scale', :'write_r
 \ir topics/array_int.sql
 \ir topics/array_intarray.sql
 \ir topics/array_queryint.sql
+\ir topics/array_intarray_fn.sql
 \ir topics/index.sql
 \ir topics/index_intarray.sql
 \ir topics/plan.sql
@@ -81,7 +82,9 @@ call pgmb.configure(:'preset', :'label', :'data_scale', :'conn_scale', :'write_r
 \ir topics/funcall.sql
 \ir topics/locking.sql
 \ir topics/cancel.sql
+\ir topics/cancel_cause.sql
 \ir topics/raise.sql
+\ir topics/notify.sql
 \ir topics/exec.sql
 \ir topics/storage.sql
 \ir topics/types.sql

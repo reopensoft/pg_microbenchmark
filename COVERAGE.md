@@ -4,7 +4,7 @@
 
 **What pg_microbenchmark tests — topic by topic, aspect by aspect.**
 
-About 2,700 tests in 20 topics. This file lists the aspects each group of
+About 2,800 tests in 21 topics. This file lists the aspects each group of
 tests is about, and the nuances that are exercised along the way.
 
 </div>
@@ -64,6 +64,7 @@ What is not covered yet is in [TODO.md](TODO.md).
 - [17. Storage (`storage`)](#17-storage-storage)
 - [18. Data types and DDL (`types`)](#18-data-types-and-ddl-types)
 - [19. Access methods over `g_types`](#19-access-methods-over-g_types)
+- [20. NOTIFY (`notify`)](#20-notify-notify)
 
 ---
 
@@ -331,6 +332,8 @@ Topic `array`, about 300 tests.
 | Operator name resolution 🧩 | with the extension on the `search_path` the same text uses another index or loses it; explicit `OPERATOR(pg_catalog.@>)`; `bigint[]` falls back to the built-in; `smallint[]` becomes ambiguous ≡ ⚠️ | `array.intarray_resolution_*` |
 | Edge cases 🧩 | NULL array against NULL element; empty arrays on either side; repeated elements; negative values; integer limits; several dimensions; lower bounds; equality against mutual containment ≡ ⚠️ | `array.intarray_null_*`, `intarray_empty_*`, `intarray_duplicates_*`, `intarray_negative_*`, `intarray_integer_limits_*`, `intarray_dimensions_*`, `intarray_lower_bound_*`, `intarray_equality_*` |
 | Selectivity 🧩 | hot and rare values under each operator, with the join method above showing the estimate ≡ | `array.intarray_estimate_*` |
+| Other intarray functions 🧩 | `sort_asc`, `sort_desc` and `sort` with a direction; `idx` (0 when absent, integer limits); `subarray` with positive and negative position and length; `icount` and `#`; `intset`; `\|`, `&`, `+`, `-` against their built-in equivalents ≡ | `array.intarray_sort_*`, `intarray_idx_*`, `intarray_subarray_*`, `intarray_count_*`, `intarray_intset_*`, `intarray_set_operator_*`, `intarray_union_*` |
+| Integer paths in recursion 🧩 | built-in `\|\|` against intarray `+` and `array_append`; a cycle detected by `<> ALL`, `idx() = 0`, `NOT @>` (both operators) and the `CYCLE` clause; a path against the set of visited nodes; paths of 1 to 10,000 elements (the longest opt-in, `optin_long_path`) ≡ | `array.intarray_path_*`, `intarray_cycle_*`, `intarray_walk_*` |
 | `query_int` and `@@` 🧩 | single value, AND, OR, NOT, nesting; six levels, 200 redundant parentheses, 50 levels to the right; repeated and absent values; built in a CTE, shared by three CTEs, joined as a table, one query per row; as a prepared-statement parameter; 200 and 2000 terms; the `~~` commutator; double negation, tautology, contradiction, De Morgan, distribution; negation and estimates ≡ ⚠️ | `array.queryint_*` |
 
 ## 4. Indexes
@@ -452,7 +455,7 @@ Every step is timed, with WAL volume and resulting size.
 
 ## 14. Interrupted statements
 
-Topic `cancel`, 70 tests. A function that calls `pg_cancel_backend()` on its
+Topic `cancel`, 171 tests in two files. A function that calls `pg_cancel_backend()` on its
 own backend puts the cancel at an exact point of the statement; those tests
 must end with `57014`. Phases that run no user code are reached with a short
 `statement_timeout`, caught in a `DO` block, each next to a twin without the
@@ -471,8 +474,16 @@ timeout.
 | Parallel query: where an error comes from | a parallel safe function fails in a worker, a restricted and an unsafe one in the leader, told apart by SQLSTATE; division by zero in a worker; a worker process that is terminated ⚠️ | `cancel.err_parallel_*_function_fails_*`, `cancel.err_parallel_worker_*` |
 | Parallel query: leader cancelled | above Gather on the first row and halfway; in the middle of a Gather Merge ⚠️ | `cancel.err_parallel_leader_*` |
 | Parallel query: worker cancelled | Parallel Seq Scan; partial aggregate; hash join on the build and on the probe side, also with 64 kB; one partition of a Parallel Append and of a partitionwise aggregate; a sort in memory and on disk ⚠️ | `cancel.err_parallel_seq_scan_*`, `err_parallel_aggregate_*`, `err_parallel_hash_join_*`, `err_parallel_append_*`, `err_parallel_partitionwise_*`, `err_parallel_sort_*` |
-| Parallel query: number of workers | the same failing statement with 0, 1, 2 and 4 workers; a 1 ms timeout while eight workers start ⚠️ | `cancel.err_parallel_same_error_*`, `cancel.timeout_*_parallel_8_workers_starting` |
-| Timeout during parsing, analysis, rewriting | a list of 50,000 constants; 200 references to a view over two views; with a 1 ms timeout and without | `cancel.timeout_*_long_in_list`, `cancel.timeout_*_view_expansion_200` |
+| Parallel query: number of workers | the same failing statement with 0, 1, 2 and 4 workers; a 5 ms timeout while eight workers start ⚠️ | `cancel.err_parallel_same_error_*`, `cancel.timeout_*_parallel_8_workers_starting` |
+| Causes other than a cancel | `lock_timeout` and `NOWAIT`; `temp_file_limit` for a sort, hash aggregate, hash join, materialized and recursive CTE (superuser only); stack depth; values too large to allocate ⚠️ | `cancel.lock_timeout_*`, `cancel.nowait_*`, `cancel.err_temp_file_limit_*`, `cancel.err_stack_depth_*`, `cancel.err_*_larger_than_allowed` |
+| `RAISE EXCEPTION` | custom SQLSTATE, three functions deep, through an SQL function, by condition name, in a `DO` block, a loop, a procedure, a trigger, before and after a write; a handler that re-raises or translates; a handler that undoes its block and goes on ≡ ⚠️ | `cancel.err_raise_*`, `cancel.err_handler_*`, `cancel.handler_*`, `cancel.nested_blocks_*` |
+| CTEs cut short | chain cancelled in the root, the middle and the reader; diamond; three readers; a store being filled, rescanned, partly filled; two inlined copies; an unread CTE never started; volatile calls made before the cancel; a writer undone ≡ ⚠️ | `cancel.err_cte_*`, `cancel.cte_*` |
+| Recursion cut short | in the anchor, the recursive term, with `UNION`, with a join, with `SEARCH` and `CYCLE`, with a growing array ⚠️ | `cancel.err_recursive_*` |
+| Temporary files | spilled store, sort and hash aggregate inside a CTE; no file left behind afterwards ≡ ⚠️ | `cancel.err_cte_spilled_*`, `cancel.temp_files_removed_after_cancel` |
+| Functions | set-returning in `FROM`, in the select list, per outer row; dynamic SQL four levels deep; a statement reused after two cancels; a sequence value lost; invalid regular expressions ≡ ⚠️ | `cancel.err_srf_*`, `cancel.err_dynamic_*`, `cancel.statement_reused_*`, `cancel.sequence_*`, `cancel.err_regex_*` |
+| Locks | what a cancelled block keeps: a lock taken before it, inside it, at session level; a timeout while waiting for a row, a table, a DDL lock; `lock_timeout` against `statement_timeout` ≡ ✍️ | `cancel.locks_*`, `cancel.timeout_20ms_waiting_for_*`, `cancel.*_timeout_before_*` |
+| intarray errors 🧩 | a NULL element in a filter, join condition, sort key, aggregate and index build; 100 errors in a row, then a call that works; recursion over sorted growing arrays ≡ ⚠️ | `cancel.err_intarray_*`, `cancel.intarray_*` |
+| A cancel pending during parsing, analysis, rewriting | a list of 50,000 constants; 200 references to a view over two views; with the cancel already requested and without | `cancel.*_cancel_long_in_list`, `cancel.*_cancel_view_expansion_200` |
 | Timeout inside the planner | exhaustive search of an 11-relation star, 5 ms against none | `cancel.timeout_*_planner_star_join_11` |
 | Timeout in the executor and in waits | expensive filter, external sort, spilled hash aggregate; `pg_sleep()`; the queue of an advisory lock | `cancel.timeout_20ms_*` |
 
@@ -554,3 +565,20 @@ Part of topic `index`, 45 tests, plus index builds and rebuilds in the DDL phase
 | Ranges | element containment, overlap and containment by GiST, SP-GiST, no index, plain comparisons; multirange by GiST ≡ | `index.range_*`, `index.multirange_*` |
 | SP-GiST on text, btree on uuid | equality and prefix against no index; point lookup and ordered range ≡ | `index.spgist_*`, `index.uuid_*` |
 | Deduplication, page splits, rebuilds | index size with and without deduplication; random against ascending keys, `fillfactor` 70; `REINDEX` of GIN, btree and GiST ≡ ✍️ | `index.dedup_*`, `index.split_*`, `index.reindex_*` |
+
+## 20. NOTIFY (`notify`)
+
+Topic `notify`, 80 tests. Nothing listens, so delivery, deduplication as a
+listener sees it and the order of arrival are not tested. Calls of
+`pg_notify()` are counted with a sequence. CTE-specific cases are in
+[1.16](#116-side-effects-notify).
+
+| Aspect | Nuances also exercised | Tests |
+|---|---|---|
+| Ways of sending | the command with and without payload; the function with constants and computed values; a command built with `format()`; the payload as a parameter under each protocol ✍️ | `notify.command_*`, `notify.function_*`, `notify.dynamic_*` |
+| Payload types | JSONB, a row as JSON, an integer array, UUID, timestamp ✍️ | `notify.payload_*` |
+| Transactions | savepoint released, rolled back, three levels; a PL/pgSQL exception block; `LISTEN` and `UNLISTEN` in one transaction; `LISTEN` not registered before commit ≡ ✍️ | `notify.savepoint_*`, `notify.exception_block`, `notify.listen_*` |
+| Repeated notifications | A,A,A; A,B,A; A,B,C,A,B,C; one payload on two channels; 10,000 distinct against 10,000 identical ✍️ | `notify.pattern_*`, `notify.many_*` |
+| How often the function is called | identical payloads (100 calls, one notification); from `VALUES`, a table, a scalar subquery, `CASE`, an SQL function, `LATERAL`, `RETURNING`, a failed block; under `LIMIT`, `EXISTS`, `count(*)`; CTE with two readers, in a diamond, unreferenced ≡ | `notify.calls_*` |
+| Triggers | `AFTER` and `BEFORE` row, statement, `TRUNCATE`, transition table; insert, update, delete, `ON CONFLICT`, `MERGE`; cost per row against per statement ≡ ✍️ | `notify.trigger_*` |
+| Limits and the queue | 7999 bytes accepted, 8000 refused, counted in bytes not characters; channel name of 64 characters; an unquoted dynamic command; `pg_notification_queue_usage()` ≡ ⚠️ | `notify.payload_*`, `notify.err_*`, `notify.queue_usage_*` |

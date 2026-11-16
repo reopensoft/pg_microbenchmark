@@ -10,13 +10,16 @@
 --    These are error tests: the statement must end with 57014 (query_canceled).
 --    A statement that survives its own cancel fails the test.
 --
--- 2. statement_timeout fires on its own schedule. Parsing, parse analysis and
---    rewriting run no user code, so nothing can cancel from the inside there;
---    a short timeout over a statement that spends its time in those phases
---    shows how long the server takes to notice. pgbench drops a client on any
---    error, so the cancel is caught in a DO block and the statement is run
---    with EXECUTE: the measured time is the time until the cancel is noticed
---    plus the cost of unwinding. Each has a twin without the timeout.
+-- 2. statement_timeout fires on its own schedule, or the cancel is requested
+--    just before the statement starts. Parsing, parse analysis and rewriting
+--    run no user code, so nothing can cancel from the inside there; these
+--    tests show how long the server takes to notice. pgbench drops a client on any
+--    error, so the cancel is caught in a DO block: the measured time is the
+--    time until the cancel is noticed plus the cost of unwinding. Each has a
+--    twin without the timeout. The protected work is followed by pg_sleep(1)
+--    in the same block: a timeout that fires just as the work ends (a lock
+--    granted at the last moment) is then still taken inside the block, not
+--    after it, where it would end the pgbench client.
 --
 -- Not covered here, because they need a second session or a client that sees
 -- the error at the top level: cancelling an idle session, an incomplete
@@ -296,11 +299,16 @@ begin
 end $do$$q$, expect_error => '57014');
 
 ------------------------------------------------------------------------------
--- statement_timeout while the statement is parsed, analysed and rewritten
+-- a cancel that is already pending while a statement is parsed, analysed and rewritten
 ------------------------------------------------------------------------------
--- No user code runs in these phases, so the cancel cannot come from inside.
--- The timeout is armed when the DO statement arrives; EXECUTE then parses and
--- analyses a statement far longer than the timeout.
+-- No user code runs in these phases, so the cancel cannot come from inside,
+-- and a timeout short enough to hit them would fire before the DO block has
+-- installed its handler. Instead the cancel is requested first and the
+-- statement is started in the same select list, by query_to_xml(): nothing
+-- checks for interrupts between the two. The time until the cancel is taken,
+-- against the twin without it, is what these phases let pass.
+-- (Without libxml query_to_xml() runs the statement and then fails; the twin
+-- catches that.)
 select string_agg((i * 3)::text, ',') as pgmb_cancel_in50k from generate_series(1, 50000) i \gset
 select string_agg('select total from v_category_totals_cat01 where false', ' union all ') as pgmb_cancel_views
 from generate_series(1, 200) \gset
@@ -308,38 +316,36 @@ select string_agg(format('join g_dim d%s on d%s.id = p.dim_id + %s', i, i, i), '
 from generate_series(1, 10) i \gset
 
 -- a list of 50,000 constants: parser and parse analysis, almost nothing to execute
-call pgmb.reg('cancel.timeout_1ms_long_in_list', '{perf}', format($q$
-begin;
-set local statement_timeout = '1ms';
+call pgmb.reg('cancel.pending_cancel_long_in_list', '{perf}', format($q$
 do $do$
 begin
-    execute $s$select count(*) from g_dim where id in (%s)$s$;
+    perform pg_cancel_backend(pg_backend_pid()),
+            query_to_xml($s$select count(*) from g_dim where id in (%s)$s$, false, false, '');
 exception when query_canceled then null;
-end $do$;
-commit;$q$, :'pgmb_cancel_in50k'));
+end $do$;$q$, :'pgmb_cancel_in50k'));
 
-call pgmb.reg('cancel.timeout_none_long_in_list', '{perf}', format($q$
+call pgmb.reg('cancel.no_cancel_long_in_list', '{perf}', format($q$
 do $do$
 begin
-    execute $s$select count(*) from g_dim where id in (%s)$s$;
+    perform query_to_xml($s$select count(*) from g_dim where id in (%s)$s$, false, false, '');
+exception when feature_not_supported then null;
 end $do$;$q$, :'pgmb_cancel_in50k'));
 
 -- 200 references to a view built on two more views: rewriter, then the planner;
 -- every branch is "where false", so nothing is executed
-call pgmb.reg('cancel.timeout_1ms_view_expansion_200', '{perf}', format($q$
-begin;
-set local statement_timeout = '1ms';
+call pgmb.reg('cancel.pending_cancel_view_expansion_200', '{perf}', format($q$
 do $do$
 begin
-    execute $s$select count(*) from (%s) s$s$;
+    perform pg_cancel_backend(pg_backend_pid()),
+            query_to_xml($s$select count(*) from (%s) s$s$, false, false, '');
 exception when query_canceled then null;
-end $do$;
-commit;$q$, :'pgmb_cancel_views'));
+end $do$;$q$, :'pgmb_cancel_views'));
 
-call pgmb.reg('cancel.timeout_none_view_expansion_200', '{perf}', format($q$
+call pgmb.reg('cancel.no_cancel_view_expansion_200', '{perf}', format($q$
 do $do$
 begin
-    execute $s$select count(*) from (%s) s$s$;
+    perform query_to_xml($s$select count(*) from (%s) s$s$, false, false, '');
+exception when feature_not_supported then null;
 end $do$;$q$, :'pgmb_cancel_views'));
 
 ------------------------------------------------------------------------------
@@ -355,6 +361,7 @@ set local statement_timeout = '5ms';
 do $do$
 begin
     execute $s$select count(*) from g_parent p %s where p.id = 1$s$;
+    perform pg_sleep(1);
 exception when query_canceled then null;
 end $do$;
 commit;$q$, :'pgmb_cancel_star'));
@@ -380,6 +387,7 @@ set local statement_timeout = '20ms';
 do $do$
 begin
     perform count(*) from generate_series(1, 2000000) n where md5(md5(md5(n::text))) < '0';
+    perform pg_sleep(1);
 exception when query_canceled then null;
 end $do$;
 commit;$q$);
@@ -391,6 +399,7 @@ set local statement_timeout = '20ms';
 do $do$
 begin
     perform count(*) from (select md5(n::text) as x from generate_series(1, 1000000) n order by 1 offset 0) s;
+    perform pg_sleep(1);
 exception when query_canceled then null;
 end $do$;
 commit;$q$);
@@ -403,6 +412,7 @@ set local statement_timeout = '20ms';
 do $do$
 begin
     perform count(*) from (select md5(n::text) as x, count(*) from generate_series(1, 1000000) n group by 1 offset 0) s;
+    perform pg_sleep(1);
 exception when query_canceled then null;
 end $do$;
 commit;$q$);
@@ -431,6 +441,7 @@ set local statement_timeout = '20ms';
 do $do$
 begin
     perform pg_advisory_xact_lock(7291001);
+    perform pg_sleep(1);
 exception when query_canceled then null;
 end $do$;
 set local statement_timeout = 0;
@@ -514,9 +525,10 @@ select cancel_if_restricted(true) from g_narrow$q$ || :'pgmb_cancel_end', expect
 call pgmb.reg('cancel.err_parallel_leader_cancelled_under_gather', '{errors,needs_data}', :'pgmb_cancel_par' || $q$
 select cancel_if_restricted(id = :n_g_narrow / 2) from g_narrow$q$ || :'pgmb_cancel_end', expect_error => '57014');
 
--- the workers sort, the leader merges and is cancelled in the middle of the merge
+-- the workers sort (on a column without an index), the leader merges and is
+-- cancelled in the middle of the merge
 call pgmb.reg('cancel.err_parallel_leader_cancelled_under_gather_merge', '{errors,needs_data}', :'pgmb_cancel_par' || $q$
-select cancel_if_restricted(id = :n_g_narrow / 2) from (select id from g_narrow order by k_uniq offset 0) s$q$ || :'pgmb_cancel_end',
+select cancel_if_restricted(id = :n_g_narrow / 2) from (select id from g_narrow order by pad offset 0) s$q$ || :'pgmb_cancel_end',
     expect_error => '57014');
 
 -- partial aggregation: a worker fails with groups half collected
@@ -528,27 +540,28 @@ call pgmb.reg('cancel.err_parallel_aggregate_worker_division_by_zero', '{errors,
 select k_100, sum(1 / (id - :n_g_narrow / 2)) from g_narrow group by k_100$q$ || :'pgmb_cancel_end',
     expect_error => '22012');
 
--- hash join in workers: the filtered side looks small to the planner and is
--- hashed; the function sits on the side named in the test
+-- hash join in workers, between two tables (a join of a table with itself on
+-- its key would be reduced to one scan): the filtered side looks small to the
+-- planner and is hashed; the function sits on the side named in the test
 call pgmb.reg('cancel.err_parallel_hash_join_build_side', '{errors,needs_data}', :'pgmb_cancel_worker' || $q$
 set local enable_mergejoin = off;
 set local enable_nestloop = off;
-select count(*) from g_narrow a join g_narrow b on b.id = a.id
-where cancel_if_safe(b.id = :n_g_narrow / 2) = 1$q$ || :'pgmb_cancel_end', expect_error => '57014');
+select count(*) from g_narrow a join g_events b on b.id = a.id
+where cancel_if_safe(b.id = :n_g_events / 2) = 1$q$ || :'pgmb_cancel_end', expect_error => '57014');
 
 call pgmb.reg('cancel.err_parallel_hash_join_probe_side', '{errors,needs_data}', :'pgmb_cancel_worker' || $q$
 set local enable_mergejoin = off;
 set local enable_nestloop = off;
-select count(*) from g_narrow a join g_narrow b on b.id = a.id
-where b.k_100 = 7 and cancel_if_safe(a.id = :n_g_narrow / 2) > 0$q$ || :'pgmb_cancel_end', expect_error => '57014');
+select count(*) from g_narrow a join g_events b on b.id = a.id
+where b.cat = 0 and cancel_if_safe(a.id = :n_g_narrow / 2) > 0$q$ || :'pgmb_cancel_end', expect_error => '57014');
 
 -- 64 kB: the table outgrows its memory while it is built and is split into batches
 call pgmb.reg('cancel.err_parallel_hash_join_build_side_work_mem_64kb', '{errors,needs_data}', :'pgmb_cancel_worker' || $q$
 set local enable_mergejoin = off;
 set local enable_nestloop = off;
 set local work_mem = '64kB';
-select count(*) from g_narrow a join g_narrow b on b.id = a.id
-where cancel_if_safe(b.id = :n_g_narrow / 2) = 1$q$ || :'pgmb_cancel_end', expect_error => '57014');
+select count(*) from g_narrow a join g_events b on b.id = a.id
+where cancel_if_safe(b.id = :n_g_events / 2) = 1$q$ || :'pgmb_cancel_end', expect_error => '57014');
 
 -- Parallel Append: one partition fails while the others are being read
 call pgmb.reg('cancel.err_parallel_append_partition_cancelled', '{errors,needs_data}', :'pgmb_cancel_worker' || $q$
@@ -574,21 +587,22 @@ select id from g_narrow order by k_uniq, cancel_if_safe(id = :n_g_narrow / 2)$q$
 -- the same failing statement with 0, 1, 2 and 4 workers: the same error
 select format($f$call pgmb.reg('cancel.err_parallel_same_error_%s_workers', '{errors,needs_data}', %L, expect_error => '22012')$f$, w,
               format(E'begin;\nset local max_parallel_workers_per_gather = %s;\nset local min_parallel_table_scan_size = 0;\n'
-                     E'set local parallel_setup_cost = 0;\nset local parallel_tuple_cost = 0;\n'
-                     E'select sum(1 / (id - :n_g_narrow / 2)) from g_narrow;\ncommit;', w))
+                     'set local parallel_setup_cost = 0;\nset local parallel_tuple_cost = 0;\n'
+                     'select sum(1 / (id - :n_g_narrow / 2)) from g_narrow;\ncommit;', w))
 from unnest(array[0, 1, 2, 4]) w \gexec
 
 -- statement_timeout while eight workers are being started
-call pgmb.reg('cancel.timeout_1ms_parallel_8_workers_starting', '{perf}', $q$
+call pgmb.reg('cancel.timeout_5ms_parallel_8_workers_starting', '{perf}', $q$
 begin;
 set local max_parallel_workers_per_gather = 8;
 set local min_parallel_table_scan_size = 0;
 set local parallel_setup_cost = 0;
 set local parallel_tuple_cost = 0;
-set local statement_timeout = '1ms';
+set local statement_timeout = '5ms';
 do $do$
 begin
     execute 'select count(*) from pgmb_data.g_narrow';
+    perform pg_sleep(1);
 exception when query_canceled then null;
 end $do$;
 commit;$q$);

@@ -296,7 +296,7 @@ select notify_count($s$merge into g_ntf_after t using generate_series(6, 15) s(n
                        when not matched then insert values (s.n, 0)$s$)$q$, equiv => 'notify.count_10');
 call pgmb.reg('notify.trigger_before_row_update_10', '{consistency}',
     $q$select notify_count($s$update g_ntf_before set v = v + 1$s$)$q$, equiv => 'notify.count_10');
--- a BEFORE trigger runs for a row that is then filtered out by nothing: no rows, no calls
+-- no row matches: a row trigger is not called at all
 call pgmb.reg('notify.trigger_before_row_update_no_rows', '{consistency}',
     $q$select notify_count($s$update g_ntf_before set v = v + 1 where id < 0$s$)$q$, equiv => 'notify.count_0');
 
