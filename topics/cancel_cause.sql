@@ -12,8 +12,8 @@
 --                timeout that is caught in a DO block. A handler catches only
 --                the error that is expected: any other one ends the pgbench
 --                client and shows up as a failure.
---                A statement_timeout block ends with pg_sleep(1), so that the
---                timeout is always taken inside the block (see cancel.sql).
+--                A statement_timeout block ends with pg_sleep(1) and the
+--                timeout is switched off right after it (see cancel.sql).
 --
 -- Not possible here: anything that needs a second session to send the signal
 -- or to hold a lock at a chosen moment, anything that ends the session
@@ -243,25 +243,46 @@ call pgmb.reg('cancel.session_usable_after_cancel_expected', '{consistency}',
 -- 9.1 statement_timeout under each protocol
 ------------------------------------------------------------------------------
 -- the timer starts with the statement that is being executed
-call pgmb.reg('cancel.timeout_20ms_sleep_simple_protocol', '{perf}', $q$
+call pgmb.reg('cancel.timeout_100ms_sleep_simple_protocol', '{perf}', $q$
 begin;
-set local statement_timeout = '20ms';
-do $do$ begin perform pg_sleep(1); exception when query_canceled then null; end $do$;
+set local statement_timeout = '100ms';
+do $do$
+begin
+    begin
+        perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
+end $do$;
 commit;$q$, protocol => 'simple');
-call pgmb.reg('cancel.timeout_20ms_sleep_extended_protocol', '{perf}', $q$
+call pgmb.reg('cancel.timeout_100ms_sleep_extended_protocol', '{perf}', $q$
 begin;
-set local statement_timeout = '20ms';
-do $do$ begin perform pg_sleep(1); exception when query_canceled then null; end $do$;
+set local statement_timeout = '100ms';
+do $do$
+begin
+    begin
+        perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
+end $do$;
 commit;$q$, protocol => 'extended');
-call pgmb.reg('cancel.timeout_20ms_sleep_prepared', '{perf}', $q$
+call pgmb.reg('cancel.timeout_100ms_sleep_prepared', '{perf}', $q$
 begin;
-set local statement_timeout = '20ms';
-do $do$ begin perform pg_sleep(1); exception when query_canceled then null; end $do$;
+set local statement_timeout = '100ms';
+do $do$
+begin
+    begin
+        perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
+end $do$;
 commit;$q$, protocol => 'prepared');
--- five statements of 10 ms each: none of them reaches the limit of 20 ms
-call pgmb.reg('cancel.timeout_20ms_five_short_statements', '{perf}', $q$
+-- five statements of 10 ms each: none of them reaches the limit of 100 ms
+call pgmb.reg('cancel.timeout_100ms_five_short_statements', '{perf}', $q$
 begin;
-set local statement_timeout = '20ms';
+set local statement_timeout = '100ms';
 select pg_sleep(0.01);
 select pg_sleep(0.01);
 select pg_sleep(0.01);
@@ -272,27 +293,27 @@ commit;$q$);
 ------------------------------------------------------------------------------
 -- 9.1 lock_timeout and NOWAIT (several clients)
 ------------------------------------------------------------------------------
--- Whoever gets the lock keeps it for 30 ms; the others give up after 20 ms
+-- Whoever gets the lock keeps it for 150 ms; the others give up after 20 ms
 -- with lock_not_available. With one client nobody waits.
 call pgmb.reg('cancel.lock_timeout_20ms_advisory_lock', '{perf,locking,concurrency}', $q$
 begin;
 set local lock_timeout = '20ms';
 do $do$ begin perform pg_advisory_xact_lock(7291002); exception when lock_not_available then null; end $do$;
 set local lock_timeout = 0;
-select pg_sleep(0.03);
+select pg_sleep(0.15);
 commit;$q$);
 call pgmb.reg('cancel.lock_timeout_20ms_row_lock', '{perf,locking,concurrency}', $q$
 begin;
 set local lock_timeout = '20ms';
 do $do$ begin perform 1 from g_cancel_lock where id = 4 for update; exception when lock_not_available then null; end $do$;
 set local lock_timeout = 0;
-select pg_sleep(0.03);
+select pg_sleep(0.15);
 commit;$q$, kind => 'write');
 -- NOWAIT gives the same error at once
 call pgmb.reg('cancel.nowait_row_lock', '{perf,locking,concurrency}', $q$
 begin;
 do $do$ begin perform 1 from g_cancel_lock where id = 5 for update nowait; exception when lock_not_available then null; end $do$;
-select pg_sleep(0.03);
+select pg_sleep(0.15);
 commit;$q$, kind => 'write');
 
 ------------------------------------------------------------------------------
@@ -574,50 +595,62 @@ call pgmb.reg('cancel.err_regex_invalid_in_cte', '{errors}',
 -- 9.6 how soon expensive work notices a timeout
 ------------------------------------------------------------------------------
 -- a PL/pgSQL loop checks at every statement
-call pgmb.reg('cancel.timeout_20ms_plpgsql_empty_loop', '{perf}', $q$
+call pgmb.reg('cancel.timeout_100ms_plpgsql_empty_loop', '{perf}', $q$
 begin;
-set local statement_timeout = '20ms';
+set local statement_timeout = '100ms';
 do $do$
 begin
-    for i in 1 .. 20000000 loop null; end loop;
-    perform pg_sleep(1);
-exception when query_canceled then null;
+    begin
+        for i in 1 .. 20000000 loop null; end loop;
+        perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
 end $do$;
 commit;$q$);
--- one call that hashes 16 MB: nothing inside it looks for a cancel
-call pgmb.reg('cancel.timeout_20ms_single_long_call', '{perf}', $q$
+-- one call that hashes 64 MB: nothing inside it looks for a cancel
+call pgmb.reg('cancel.timeout_100ms_single_long_call', '{perf}', $q$
 begin;
-set local statement_timeout = '20ms';
+set local statement_timeout = '100ms';
 do $do$
 begin
-    perform md5(repeat('x', 16000000));
-    perform pg_sleep(1);
-exception when query_canceled then null;
+    begin
+        perform md5(repeat('x', 64000000));
+        perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
 end $do$;
 commit;$q$);
 call pgmb.reg('cancel.timeout_none_single_long_call', '{perf}', $q$
 do $do$
 begin
-    perform md5(repeat('x', 16000000));
+    perform md5(repeat('x', 64000000));
 end $do$;$q$);
-call pgmb.reg('cancel.timeout_20ms_regex_over_many_rows', '{perf}', $q$
+call pgmb.reg('cancel.timeout_100ms_regex_over_many_rows', '{perf}', $q$
 begin;
-set local statement_timeout = '20ms';
+set local statement_timeout = '100ms';
 do $do$
 begin
-    perform count(*) from generate_series(1, 2000000) n where repeat('ab', 20) || n ~ '^(a|b)*[0-9]+7$';
-    perform pg_sleep(1);
-exception when query_canceled then null;
+    begin
+        perform count(*) from generate_series(1, 2000000) n where repeat('ab', 20) || n ~ '^(a|b)*[0-9]+7$';
+        perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
 end $do$;
 commit;$q$);
-call pgmb.reg('cancel.timeout_20ms_jsonb_aggregate', '{perf}', $q$
+call pgmb.reg('cancel.timeout_100ms_jsonb_aggregate', '{perf}', $q$
 begin;
-set local statement_timeout = '20ms';
+set local statement_timeout = '100ms';
 do $do$
 begin
-    perform jsonb_agg(jsonb_build_object('n', n, 't', md5(n::text))) from generate_series(1, 500000) n;
-    perform pg_sleep(1);
-exception when query_canceled then null;
+    begin
+        perform jsonb_agg(jsonb_build_object('n', n, 't', md5(n::text))) from generate_series(1, 500000) n;
+        perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
 end $do$;
 commit;$q$);
 
@@ -638,49 +671,75 @@ call pgmb.reg('cancel.update_cancelled_halfway_leaves_rows_expected', '{consiste
 ------------------------------------------------------------------------------
 -- 9.7 a timeout while waiting for a lock (several clients)
 ------------------------------------------------------------------------------
--- The pattern of cancel.timeout_20ms_waiting_for_lock: the client that gets
--- the lock keeps it for 30 ms, the others are cancelled in the queue.
-call pgmb.reg('cancel.timeout_20ms_waiting_for_row_update', '{perf,locking,concurrency}', $q$
+-- The pattern of cancel.timeout_100ms_waiting_for_lock: the client that gets
+-- the lock keeps it for 150 ms, the others are cancelled in the queue.
+call pgmb.reg('cancel.timeout_100ms_waiting_for_row_update', '{perf,locking,concurrency}', $q$
 begin;
-set local statement_timeout = '20ms';
-do $do$ begin update g_cancel_lock set v = v + 1 where id = 1; perform pg_sleep(1); exception when query_canceled then null; end $do$;
-set local statement_timeout = 0;
-select pg_sleep(0.03);
-commit;$q$, kind => 'write');
-call pgmb.reg('cancel.timeout_20ms_waiting_for_row_delete', '{perf,locking,concurrency}', $q$
-begin;
-set local statement_timeout = '20ms';
+set local statement_timeout = '100ms';
 do $do$
 begin
-    with d as (delete from g_cancel_lock where id = 2 returning id, v)
-    insert into g_cancel_lock select id, v + 1 from d;
-    perform pg_sleep(1);
-exception when query_canceled then null;
+    begin
+        update g_cancel_lock set v = v + 1 where id = 1; perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
 end $do$;
-set local statement_timeout = 0;
-select pg_sleep(0.03);
+select pg_sleep(0.15);
 commit;$q$, kind => 'write');
-call pgmb.reg('cancel.timeout_20ms_waiting_for_select_for_update', '{perf,locking,concurrency}', $q$
+call pgmb.reg('cancel.timeout_100ms_waiting_for_row_delete', '{perf,locking,concurrency}', $q$
 begin;
-set local statement_timeout = '20ms';
-do $do$ begin perform 1 from g_cancel_lock where id = 3 for update; perform pg_sleep(1); exception when query_canceled then null; end $do$;
-set local statement_timeout = 0;
-select pg_sleep(0.03);
+set local statement_timeout = '100ms';
+do $do$
+begin
+    begin
+        with d as (delete from g_cancel_lock where id = 2 returning id, v)
+        insert into g_cancel_lock select id, v + 1 from d;
+        perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
+end $do$;
+select pg_sleep(0.15);
 commit;$q$, kind => 'write');
-call pgmb.reg('cancel.timeout_20ms_waiting_for_table_lock', '{perf,locking,concurrency}', $q$
+call pgmb.reg('cancel.timeout_100ms_waiting_for_select_for_update', '{perf,locking,concurrency}', $q$
 begin;
-set local statement_timeout = '20ms';
-do $do$ begin lock table g_cancel_tlock in access exclusive mode; perform pg_sleep(1); exception when query_canceled then null; end $do$;
-set local statement_timeout = 0;
-select pg_sleep(0.03);
+set local statement_timeout = '100ms';
+do $do$
+begin
+    begin
+        perform 1 from g_cancel_lock where id = 3 for update; perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
+end $do$;
+select pg_sleep(0.15);
+commit;$q$, kind => 'write');
+call pgmb.reg('cancel.timeout_100ms_waiting_for_table_lock', '{perf,locking,concurrency}', $q$
+begin;
+set local statement_timeout = '100ms';
+do $do$
+begin
+    begin
+        lock table g_cancel_tlock in access exclusive mode; perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
+end $do$;
+select pg_sleep(0.15);
 commit;$q$, kind => 'write');
 -- ALTER TABLE takes a lock that conflicts with itself
-call pgmb.reg('cancel.timeout_20ms_waiting_for_ddl_lock', '{perf,locking,concurrency}', $q$
+call pgmb.reg('cancel.timeout_100ms_waiting_for_ddl_lock', '{perf,locking,concurrency}', $q$
 begin;
-set local statement_timeout = '20ms';
-do $do$ begin alter table g_cancel_ddl set (fillfactor = 90); perform pg_sleep(1); exception when query_canceled then null; end $do$;
-set local statement_timeout = 0;
-select pg_sleep(0.03);
+set local statement_timeout = '100ms';
+do $do$
+begin
+    begin
+        alter table g_cancel_ddl set (fillfactor = 90); perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
+end $do$;
+select pg_sleep(0.15);
 commit;$q$, kind => 'write');
 
 -- Two timeouts at once: the shorter one decides which error the waiter gets.
@@ -691,17 +750,22 @@ set local lock_timeout = '10ms';
 set local statement_timeout = '1s';
 do $do$ begin perform pg_advisory_xact_lock(7291003); exception when lock_not_available then null; end $do$;
 set local lock_timeout = 0;
-set local statement_timeout = 0;
-select pg_sleep(0.03);
+select pg_sleep(0.15);
 commit;$q$);
 call pgmb.reg('cancel.statement_timeout_before_lock_timeout', '{perf,locking,concurrency}', $q$
 begin;
 set local lock_timeout = '1s';
-set local statement_timeout = '10ms';
-do $do$ begin perform pg_advisory_xact_lock(7291004); perform pg_sleep(1); exception when query_canceled then null; end $do$;
+set local statement_timeout = '100ms';
+do $do$
+begin
+    begin
+        perform pg_advisory_xact_lock(7291004); perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
+end $do$;
 set local lock_timeout = 0;
-set local statement_timeout = 0;
-select pg_sleep(0.03);
+select pg_sleep(0.15);
 commit;$q$);
 
 ------------------------------------------------------------------------------

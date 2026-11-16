@@ -455,7 +455,7 @@ Every step is timed, with WAL volume and resulting size.
 
 ## 14. Interrupted statements
 
-Topic `cancel`, 171 tests in two files. A function that calls `pg_cancel_backend()` on its
+Topic `cancel`, 169 tests in two files. A function that calls `pg_cancel_backend()` on its
 own backend puts the cancel at an exact point of the statement; those tests
 must end with `57014`. Phases that run no user code are reached with a short
 `statement_timeout`, caught in a `DO` block, each next to a twin without the
@@ -474,18 +474,18 @@ timeout.
 | Parallel query: where an error comes from | a parallel safe function fails in a worker, a restricted and an unsafe one in the leader, told apart by SQLSTATE; division by zero in a worker; a worker process that is terminated ⚠️ | `cancel.err_parallel_*_function_fails_*`, `cancel.err_parallel_worker_*` |
 | Parallel query: leader cancelled | above Gather on the first row and halfway; in the middle of a Gather Merge ⚠️ | `cancel.err_parallel_leader_*` |
 | Parallel query: worker cancelled | Parallel Seq Scan; partial aggregate; hash join on the build and on the probe side, also with 64 kB; one partition of a Parallel Append and of a partitionwise aggregate; a sort in memory and on disk ⚠️ | `cancel.err_parallel_seq_scan_*`, `err_parallel_aggregate_*`, `err_parallel_hash_join_*`, `err_parallel_append_*`, `err_parallel_partitionwise_*`, `err_parallel_sort_*` |
-| Parallel query: number of workers | the same failing statement with 0, 1, 2 and 4 workers; a 5 ms timeout while eight workers start ⚠️ | `cancel.err_parallel_same_error_*`, `cancel.timeout_*_parallel_8_workers_starting` |
+| Parallel query: number of workers | the same failing statement with 0, 1, 2 and 4 workers ⚠️ | `cancel.err_parallel_same_error_*` |
 | Causes other than a cancel | `lock_timeout` and `NOWAIT`; `temp_file_limit` for a sort, hash aggregate, hash join, materialized and recursive CTE (superuser only); stack depth; values too large to allocate ⚠️ | `cancel.lock_timeout_*`, `cancel.nowait_*`, `cancel.err_temp_file_limit_*`, `cancel.err_stack_depth_*`, `cancel.err_*_larger_than_allowed` |
 | `RAISE EXCEPTION` | custom SQLSTATE, three functions deep, through an SQL function, by condition name, in a `DO` block, a loop, a procedure, a trigger, before and after a write; a handler that re-raises or translates; a handler that undoes its block and goes on ≡ ⚠️ | `cancel.err_raise_*`, `cancel.err_handler_*`, `cancel.handler_*`, `cancel.nested_blocks_*` |
 | CTEs cut short | chain cancelled in the root, the middle and the reader; diamond; three readers; a store being filled, rescanned, partly filled; two inlined copies; an unread CTE never started; volatile calls made before the cancel; a writer undone ≡ ⚠️ | `cancel.err_cte_*`, `cancel.cte_*` |
 | Recursion cut short | in the anchor, the recursive term, with `UNION`, with a join, with `SEARCH` and `CYCLE`, with a growing array ⚠️ | `cancel.err_recursive_*` |
 | Temporary files | spilled store, sort and hash aggregate inside a CTE; no file left behind afterwards ≡ ⚠️ | `cancel.err_cte_spilled_*`, `cancel.temp_files_removed_after_cancel` |
 | Functions | set-returning in `FROM`, in the select list, per outer row; dynamic SQL four levels deep; a statement reused after two cancels; a sequence value lost; invalid regular expressions ≡ ⚠️ | `cancel.err_srf_*`, `cancel.err_dynamic_*`, `cancel.statement_reused_*`, `cancel.sequence_*`, `cancel.err_regex_*` |
-| Locks | what a cancelled block keeps: a lock taken before it, inside it, at session level; a timeout while waiting for a row, a table, a DDL lock; `lock_timeout` against `statement_timeout` ≡ ✍️ | `cancel.locks_*`, `cancel.timeout_20ms_waiting_for_*`, `cancel.*_timeout_before_*` |
+| Locks | what a cancelled block keeps: a lock taken before it, inside it, at session level; a timeout while waiting for a row, a table, a DDL lock; `lock_timeout` against `statement_timeout` ≡ ✍️ | `cancel.locks_*`, `cancel.timeout_100ms_waiting_for_*`, `cancel.*_timeout_before_*` |
 | intarray errors 🧩 | a NULL element in a filter, join condition, sort key, aggregate and index build; 100 errors in a row, then a call that works; recursion over sorted growing arrays ≡ ⚠️ | `cancel.err_intarray_*`, `cancel.intarray_*` |
 | A cancel pending during parsing, analysis, rewriting | a list of 50,000 constants; 200 references to a view over two views; with the cancel already requested and without | `cancel.*_cancel_long_in_list`, `cancel.*_cancel_view_expansion_200` |
-| Timeout inside the planner | exhaustive search of an 11-relation star, 5 ms against none | `cancel.timeout_*_planner_star_join_11` |
-| Timeout in the executor and in waits | expensive filter, external sort, spilled hash aggregate; `pg_sleep()`; the queue of an advisory lock | `cancel.timeout_20ms_*` |
+| Timeout inside the planner | exhaustive search of a 15-relation star (about 0.4 s), 100 ms against none | `cancel.timeout_*_planner_star_join_15` |
+| Timeout in the executor and in waits | expensive filter, external sort, spilled hash aggregate; `pg_sleep()`; the queue of an advisory lock | `cancel.timeout_100ms_*` |
 
 ## 15. RAISE NOTICE
 

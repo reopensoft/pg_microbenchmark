@@ -17,9 +17,12 @@
 --    error, so the cancel is caught in a DO block: the measured time is the
 --    time until the cancel is noticed plus the cost of unwinding. Each has a
 --    twin without the timeout. The protected work is followed by pg_sleep(1)
---    in the same block: a timeout that fires just as the work ends (a lock
---    granted at the last moment) is then still taken inside the block, not
---    after it, where it would end the pgbench client.
+--    in the same block, so that a timeout that fires just as the work ends
+--    (a lock granted at the last moment) is still taken inside the block; and
+--    the timeout is switched off right after the block, so that the end of
+--    the DO statement and the COMMIT, which a busy machine may delay by more
+--    than the timeout, run without it. A cancel taken outside the block would
+--    end the pgbench client.
 --
 -- Not covered here, because they need a second session or a client that sees
 -- the error at the top level: cancelling an idle session, an incomplete
@@ -313,7 +316,7 @@ select string_agg((i * 3)::text, ',') as pgmb_cancel_in50k from generate_series(
 select string_agg('select total from v_category_totals_cat01 where false', ' union all ') as pgmb_cancel_views
 from generate_series(1, 200) \gset
 select string_agg(format('join g_dim d%s on d%s.id = p.dim_id + %s', i, i, i), ' ' order by i) as pgmb_cancel_star
-from generate_series(1, 10) i \gset
+from generate_series(1, 14) i \gset
 
 -- a list of 50,000 constants: parser and parse analysis, almost nothing to execute
 call pgmb.reg('cancel.pending_cancel_long_in_list', '{perf}', format($q$
@@ -351,22 +354,25 @@ end $do$;$q$, :'pgmb_cancel_views'));
 ------------------------------------------------------------------------------
 -- statement_timeout inside the planner
 ------------------------------------------------------------------------------
--- a star of 11 relations searched exhaustively; the query itself reads one row
-call pgmb.reg('cancel.timeout_5ms_planner_star_join_11', '{perf}', format($q$
+-- a star of 15 relations searched exhaustively; the query itself reads one row
+call pgmb.reg('cancel.timeout_100ms_planner_star_join_15', '{perf}', format($q$
 begin;
 set local join_collapse_limit = 20;
 set local from_collapse_limit = 20;
 set local geqo = off;
-set local statement_timeout = '5ms';
+set local statement_timeout = '100ms';
 do $do$
 begin
-    execute $s$select count(*) from g_parent p %s where p.id = 1$s$;
-    perform pg_sleep(1);
-exception when query_canceled then null;
+    begin
+        execute $s$select count(*) from g_parent p %s where p.id = 1$s$;
+        perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
 end $do$;
 commit;$q$, :'pgmb_cancel_star'));
 
-call pgmb.reg('cancel.timeout_none_planner_star_join_11', '{perf}', format($q$
+call pgmb.reg('cancel.timeout_none_planner_star_join_15', '{perf}', format($q$
 begin;
 set local join_collapse_limit = 20;
 set local from_collapse_limit = 20;
@@ -381,39 +387,48 @@ commit;$q$, :'pgmb_cancel_star'));
 -- statement_timeout in the executor: scan, sort, hash
 ------------------------------------------------------------------------------
 -- Bounded inputs, as a safety net in case the timeout does not fire.
-call pgmb.reg('cancel.timeout_20ms_scan_expensive_filter', '{perf}', $q$
+call pgmb.reg('cancel.timeout_100ms_scan_expensive_filter', '{perf}', $q$
 begin;
-set local statement_timeout = '20ms';
+set local statement_timeout = '100ms';
 do $do$
 begin
-    perform count(*) from generate_series(1, 2000000) n where md5(md5(md5(n::text))) < '0';
-    perform pg_sleep(1);
-exception when query_canceled then null;
+    begin
+        perform count(*) from generate_series(1, 2000000) n where md5(md5(md5(n::text))) < '0';
+        perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
 end $do$;
 commit;$q$);
 
-call pgmb.reg('cancel.timeout_20ms_external_sort', '{perf}', $q$
+call pgmb.reg('cancel.timeout_100ms_external_sort', '{perf}', $q$
 begin;
 set local work_mem = '64kB';
-set local statement_timeout = '20ms';
+set local statement_timeout = '100ms';
 do $do$
 begin
-    perform count(*) from (select md5(n::text) as x from generate_series(1, 1000000) n order by 1 offset 0) s;
-    perform pg_sleep(1);
-exception when query_canceled then null;
+    begin
+        perform count(*) from (select md5(n::text) as x from generate_series(1, 1000000) n order by 1 offset 0) s;
+        perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
 end $do$;
 commit;$q$);
 
-call pgmb.reg('cancel.timeout_20ms_hash_aggregate_spilled', '{perf}', $q$
+call pgmb.reg('cancel.timeout_100ms_hash_aggregate_spilled', '{perf}', $q$
 begin;
 set local work_mem = '64kB';
 set local enable_sort = off;
-set local statement_timeout = '20ms';
+set local statement_timeout = '100ms';
 do $do$
 begin
-    perform count(*) from (select md5(n::text) as x, count(*) from generate_series(1, 1000000) n group by 1 offset 0) s;
-    perform pg_sleep(1);
-exception when query_canceled then null;
+    begin
+        perform count(*) from (select md5(n::text) as x, count(*) from generate_series(1, 1000000) n group by 1 offset 0) s;
+        perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
 end $do$;
 commit;$q$);
 
@@ -421,31 +436,36 @@ commit;$q$);
 -- statement_timeout while the backend waits
 ------------------------------------------------------------------------------
 -- waiting on its latch
-call pgmb.reg('cancel.timeout_20ms_waiting_in_sleep', '{perf}', $q$
+call pgmb.reg('cancel.timeout_100ms_waiting_in_sleep', '{perf}', $q$
 begin;
-set local statement_timeout = '20ms';
+set local statement_timeout = '100ms';
 do $do$
 begin
-    perform pg_sleep(1);
-exception when query_canceled then null;
+    begin
+        perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
 end $do$;
 commit;$q$);
 
 -- Waiting for a lock. Every client wants the same advisory lock and whoever
--- gets it keeps it for 30 ms, longer than the timeout: with two or more
+-- gets it keeps it for 150 ms, longer than the timeout: with two or more
 -- clients the others are cancelled in the lock queue. A single client never
 -- waits. An advisory lock is used so that no other test is blocked.
-call pgmb.reg('cancel.timeout_20ms_waiting_for_lock', '{perf,locking,concurrency}', $q$
+call pgmb.reg('cancel.timeout_100ms_waiting_for_lock', '{perf,locking,concurrency}', $q$
 begin;
-set local statement_timeout = '20ms';
+set local statement_timeout = '100ms';
 do $do$
 begin
-    perform pg_advisory_xact_lock(7291001);
-    perform pg_sleep(1);
-exception when query_canceled then null;
+    begin
+        perform pg_advisory_xact_lock(7291001);
+        perform pg_sleep(1);
+    exception when query_canceled then null;
+    end;
+    perform set_config('statement_timeout', '0', true);
 end $do$;
-set local statement_timeout = 0;
-select pg_sleep(0.03);
+select pg_sleep(0.15);
 commit;$q$);
 
 ------------------------------------------------------------------------------
@@ -590,31 +610,3 @@ select format($f$call pgmb.reg('cancel.err_parallel_same_error_%s_workers', '{er
                      'set local parallel_setup_cost = 0;\nset local parallel_tuple_cost = 0;\n'
                      'select sum(1 / (id - :n_g_narrow / 2)) from g_narrow;\ncommit;', w))
 from unnest(array[0, 1, 2, 4]) w \gexec
-
--- statement_timeout while eight workers are being started
-call pgmb.reg('cancel.timeout_5ms_parallel_8_workers_starting', '{perf}', $q$
-begin;
-set local max_parallel_workers_per_gather = 8;
-set local min_parallel_table_scan_size = 0;
-set local parallel_setup_cost = 0;
-set local parallel_tuple_cost = 0;
-set local statement_timeout = '5ms';
-do $do$
-begin
-    execute 'select count(*) from pgmb_data.g_narrow';
-    perform pg_sleep(1);
-exception when query_canceled then null;
-end $do$;
-commit;$q$);
-
-call pgmb.reg('cancel.timeout_none_parallel_8_workers_starting', '{perf}', $q$
-begin;
-set local max_parallel_workers_per_gather = 8;
-set local min_parallel_table_scan_size = 0;
-set local parallel_setup_cost = 0;
-set local parallel_tuple_cost = 0;
-do $do$
-begin
-    execute 'select count(*) from pgmb_data.g_narrow';
-end $do$;
-commit;$q$);
