@@ -4,7 +4,7 @@
 
 **What pg_microbenchmark tests — topic by topic, aspect by aspect.**
 
-More than 2,000 tests in 15 topics. This file lists the aspects each group of
+About 2,700 tests in 20 topics. This file lists the aspects each group of
 tests is about, and the nuances that are exercised along the way.
 
 </div>
@@ -58,6 +58,12 @@ What is not covered yet is in [TODO.md](TODO.md).
 - [11. Functions, result size, locking](#11-functions-result-size-locking)
 - [12. DDL phase](#12-ddl-phase)
 - [13. Cross-cutting measurements](#13-cross-cutting-measurements)
+- [14. Interrupted statements](#14-interrupted-statements)
+- [15. RAISE NOTICE](#15-raise-notice)
+- [16. Executor and planner nodes (`exec`)](#16-executor-and-planner-nodes-exec)
+- [17. Storage (`storage`)](#17-storage-storage)
+- [18. Data types and DDL (`types`)](#18-data-types-and-ddl-types)
+- [19. Access methods over `g_types`](#19-access-methods-over-g_types)
 
 ---
 
@@ -443,3 +449,108 @@ Every step is timed, with WAL volume and resulting size.
 | `checksum` | the result of one test is the same in two runs, for example with a server setting on and off |
 | `analyze` | worst ratio between estimated and actual rows; memory and disk use of sorts, hashes and stores |
 | `errors` | the expected SQLSTATE, for about 150 statements that must fail |
+
+## 14. Interrupted statements
+
+Topic `cancel`, 70 tests. A function that calls `pg_cancel_backend()` on its
+own backend puts the cancel at an exact point of the statement; those tests
+must end with `57014`. Phases that run no user code are reached with a short
+`statement_timeout`, caught in a `DO` block, each next to a twin without the
+timeout.
+
+| Aspect | Nuances also exercised | Tests |
+|---|---|---|
+| Planner | constant folding of an immutable function, in the main query, a CTE and a subquery; a stable function evaluated for a row estimate ⚠️ | `cancel.err_planner_*` |
+| Executor startup | partition pruning with a stable function, on a cached plan so that planning is not what gets cancelled ⚠️ | `cancel.err_executor_start_*` |
+| First row | before any row (scalar subquery), on the first row, after it ⚠️ | `cancel.err_first_row_*` |
+| Halfway through a scan | sequential, index and bitmap heap scans; the second partition of an Append; an expensive filter; a recursive CTE; the second reader of a materialized CTE ⚠️ | `cancel.err_scan_*` |
+| Sort | while rows are loaded and while sorted rows are returned; in memory and with runs in temporary files ⚠️ | `cancel.err_sort_*` |
+| Hash join, hash aggregate | while the table is built and while it is probed, in memory and in batches; groups being collected, spilled, returned ⚠️ | `cancel.err_hash_join_*`, `cancel.err_hash_aggregate_*` |
+| `RETURNING` | update, insert and delete cancelled on row 50 of 100; a writer nobody reads; the second of two writers ✍️ ⚠️ | `cancel.err_returning_*` |
+| Triggers | at the end of the statement; deferred, fired by `SET CONSTRAINTS` ✍️ ⚠️ | `cancel.err_trigger_*` |
+| Parallel query: where an error comes from | a parallel safe function fails in a worker, a restricted and an unsafe one in the leader, told apart by SQLSTATE; division by zero in a worker; a worker process that is terminated ⚠️ | `cancel.err_parallel_*_function_fails_*`, `cancel.err_parallel_worker_*` |
+| Parallel query: leader cancelled | above Gather on the first row and halfway; in the middle of a Gather Merge ⚠️ | `cancel.err_parallel_leader_*` |
+| Parallel query: worker cancelled | Parallel Seq Scan; partial aggregate; hash join on the build and on the probe side, also with 64 kB; one partition of a Parallel Append and of a partitionwise aggregate; a sort in memory and on disk ⚠️ | `cancel.err_parallel_seq_scan_*`, `err_parallel_aggregate_*`, `err_parallel_hash_join_*`, `err_parallel_append_*`, `err_parallel_partitionwise_*`, `err_parallel_sort_*` |
+| Parallel query: number of workers | the same failing statement with 0, 1, 2 and 4 workers; a 1 ms timeout while eight workers start ⚠️ | `cancel.err_parallel_same_error_*`, `cancel.timeout_*_parallel_8_workers_starting` |
+| Timeout during parsing, analysis, rewriting | a list of 50,000 constants; 200 references to a view over two views; with a 1 ms timeout and without | `cancel.timeout_*_long_in_list`, `cancel.timeout_*_view_expansion_200` |
+| Timeout inside the planner | exhaustive search of an 11-relation star, 5 ms against none | `cancel.timeout_*_planner_star_join_11` |
+| Timeout in the executor and in waits | expensive filter, external sort, spilled hash aggregate; `pg_sleep()`; the queue of an advisory lock | `cancel.timeout_20ms_*` |
+
+## 15. RAISE NOTICE
+
+Topic `raise`, 103 tests. Nothing in the benchmark reads the messages a
+statement sends, so every test filters them out with `client_min_messages`.
+Text and diagnostic fields are checked by raising the same thing as an
+exception and catching it; how often `RAISE` runs is counted with a sequence.
+`RAISE INFO`, the order and arrival of messages and the server log are not
+covered.
+
+| Aspect | Nuances also exercised | Tests |
+|---|---|---|
+| What is rejected | too few and too many parameters; a format that is an expression, a variable, a bare word; `MESSAGE` given twice; a NULL option; an unknown condition name; a notice followed by an error ⚠️ | `raise.err_*` |
+| Text of the message | `%` and `%%`, ten parameters; NULL, boolean, integers, numeric, timestamps, UUID; array, JSONB, record, range, multirange, bytea; 0 to 100,000 characters; Polish letters, a four-byte character, a tab ≡ | `raise.format_*` |
+| Diagnostic fields | `USING MESSAGE` from an expression; `DETAIL`, `HINT`, `ERRCODE`, `COLUMN`, `CONSTRAINT`, `DATATYPE`, `TABLE`, `SCHEMA`; empty values and odd identifiers; the call stack three functions deep; every form once at `NOTICE` level ≡ | `raise.using_*`, `raise.context_*`, `raise.notice_all_forms_run` |
+| Control flow in PL/pgSQL | `IF` and `CASE` branches; a loop never entered; `FOR ... IN SELECT` over nothing, with `LIMIT`, `EXIT`, `CONTINUE`; nested calls; `RETURN` inside a loop; an exception block that raised before failing ≡ | `raise.flow_*` |
+| A raising function in SQL | all rows, `LIMIT`, `EXISTS` (select list not evaluated); CTE unread, one reader, two readers default / materialized / not materialized; correlated subquery; `LATERAL`, also without outer rows; recursion, also endless under `LIMIT`; `RETURNING`, also unread ≡ ✍️ | `raise.sql_*`, `raise.cte_*`, `raise.recursive_*`, `raise.returning_*` |
+| Triggers | per row and per statement, for insert, update, update of nothing, delete, `ON CONFLICT DO UPDATE` and `MERGE` ≡ ✍️ | `raise.trigger_row_*`, `raise.trigger_statement_*` |
+| Cost of a filtered message | loop of 1 to 100,000 against an empty loop; constant, one and five parameters, `USING`; array and JSONB arguments; one megabyte as 10,000, 1,000 or 10 messages | `raise.loop_*` |
+| Cost by caller | 1000 calls from SQL against a silent function; a trigger per row against per statement against none ✍️ | `raise.sql_calls_*`, `raise.trigger_cost_*` |
+
+## 16. Executor and planner nodes (`exec`)
+
+Topic `exec`, 61 tests.
+
+| Aspect | Nuances also exercised | Tests |
+|---|---|---|
+| Memoize | few keys (hits), many keys (misses), 64 kB (evictions), NULL keys, a cached `LATERAL` aggregate; each with the cache and without ≡ | `exec.memoize_*` |
+| Materialize | inner side of a nested loop stored and rescanned, re-executed without it, spilled to a file, a materialized CTE as the inner side ≡ | `exec.material_*` |
+| Grouping sets | `GROUPING SETS` hashed and sorted and as `UNION ALL`; `ROLLUP` and `CUBE` against their grouping sets; three-column cube ≡ | `exec.grouping_sets_*`, `exec.rollup_*`, `exec.cube_*` |
+| JIT | expressions off, compiled, optimized and inlined, default thresholds; tuple deforming on and off; forced on a point lookup ≡ | `exec.jit_*` |
+| Cached plans and the schema | a cached statement follows `search_path`; survives a dropped index; `select *` after `ADD COLUMN` is refused ≡ ⚠️ | `exec.plancache_*`, `exec.err_plancache_*` |
+| EvalPlanQual | every client updates the same row: recheck passes, recheck fails, with a join, `FOR UPDATE`, delete and re-insert ✍️ | `exec.epq_*` |
+| Short circuits | `OR` and `AND` on constants and per row, both orders; `CASE` protecting a row expression but not a constant one ≡ ⚠️ | `exec.shortcircuit_*`, `exec.err_shortcircuit_*` |
+| `ROWS FROM` | functions of unequal length, `WITH ORDINALITY`, `unnest` of two arrays, 10,000 rows against a join on the row number ≡ | `exec.srf_*` |
+
+## 17. Storage (`storage`)
+
+Topic `storage`, 63 tests, plus timed steps in the DDL phase.
+
+| Aspect | Nuances also exercised | Tests |
+|---|---|---|
+| Row versions | own insert visible, update on the same page, failed block undone; one row updated 20 times; a scan after rolled back and after committed updates ≡ ✍️ | `storage.mvcc_*` |
+| Savepoints | none, one released, one rolled back, 10 nested, 100 in sequence with and without writes; only the failed block is undone ≡ ✍️ | `storage.savepoint_*` |
+| Advisory locks, deadlock | own key, one key for all, shared mode, try-lock, session level; two rows locked in opposite order (opt-in `optin_deadlock`) ✍️ | `storage.advisory_*`, `storage.deadlock_*` |
+| Foreign key actions | `ON DELETE CASCADE`, `SET NULL`, children deleted by hand, a five-level cascade; what is left afterwards; violations ≡ ✍️ ⚠️ | `storage.fk_*`, `storage.err_fk_*` |
+| Triggers | `INSTEAD OF` on a view, two `BEFORE` triggers in name order, a transition table, `TRUNCATE` ≡ ✍️ | `storage.trigger_*` |
+| TOAST | compressed, `EXTERNAL` and incompressible values: whole value, a slice, the size only; updates that keep or rewrite the value ≡ ✍️ | `storage.toast_*` |
+| Bloat (DDL phase) | every row rewritten, `VACUUM`, `REINDEX INDEX` and `TABLE`, `VACUUM FULL`, with time, WAL and size per step; index-only scan over visible and not visible pages; scan of a compact and of a bloated table ≡ | `storage.bloat_*`, `storage.index_only_scan_*`, `storage.seq_scan_*` |
+| Logged, unlogged, temporary | the same load and index build (DDL phase); insert and delete of 100 rows and of one row; a temporary table created and dropped per transaction ✍️ | `storage.load_*`, `storage.wal_*`, `storage.temp_table_*` |
+| Sequences | a value taken in a failed block is lost, `currval`, `setval`; one sequence for all clients, `CACHE 100`, 100 values per statement, rollback ≡ ⚠️ | `storage.sequence_*`, `storage.err_sequence_*` |
+
+## 18. Data types and DDL (`types`)
+
+Topic `types`, 104 tests, plus timed steps in the DDL phase.
+
+| Aspect | Nuances also exercised | Tests |
+|---|---|---|
+| Numbers | the same sum as smallint, integer, bigint, numeric, float8; overflow of each type; NaN and Infinity in comparisons and sorts ≡ ⚠️ | `types.sum_*`, `types.err_*_overflow`, `types.nan_*` |
+| UUID | generation, sorting, comparison as value and as text, malformed input ≡ ⚠️ | `types.uuid_*` |
+| Pattern matching | a prefix by `LIKE`, regex, `starts_with`, `left`; the same in any case by `ILIKE`, `~*`, `lower`; infix, alternation, `SIMILAR TO`, `regexp_replace` ≡ | `types.match_*` |
+| Unicode, ICU | characters against bytes, NFC and NFD; a nondeterministic collation in equality, grouping and sorting, against `"C"` ≡ | `types.unicode_*`, `types.collation_*` |
+| JSON | `JSON_TABLE` against `jsonb_to_recordset` and `jsonb_array_elements`; one field by `->`, `#>>`, jsonpath, `JSON_VALUE`, `JSON_TABLE`; parsing as json and jsonb; `JSON_EXISTS`, `JSON_QUERY` ≡ ⚠️ | `types.json_*` |
+| Ranges | union, intersection, difference, multirange, containment, empty; `range_agg`; errors of a non-contiguous result ≡ ⚠️ | `types.range_*`, `types.multirange_*` |
+| Enum, domain, composite, polymorphic | declaration order; domain checks on cast; field access and row comparison; `anyelement` against `anycompatible` ≡ ⚠️ | `types.enum_*`, `types.domain_*`, `types.composite_*`, `types.polymorphic_*` |
+| Generated columns | stored and virtual: computed, not writable, cost on insert and on read ≡ ✍️ ⚠️ | `types.generated_*` |
+| `ALTER TABLE` (DDL phase) | add column without, with a constant and with a volatile default; `int` to `bigint`; a wider `varchar`; `SET NOT NULL`; drop column; attach a partition with and without a matching constraint; 1000 columns; a view with a rule ✍️ | `types.ddl_*`, `types.wide_table_*`, `types.rule_*` |
+
+## 19. Access methods over `g_types`
+
+Part of topic `index`, 45 tests, plus index builds and rebuilds in the DDL phase.
+
+| Aspect | Nuances also exercised | Tests |
+|---|---|---|
+| JSONB | containment through `jsonb_ops`, `jsonb_path_ops`, an expression index, no index; nested values; jsonpath; key existence ≡ | `index.jsonb_*` |
+| Full text | one term through GIN, `to_tsvector` without an index, `LIKE`; AND, OR, negation, prefix, phrase, a term in every row, ranking ≡ | `index.fts_*` |
+| Ranges | element containment, overlap and containment by GiST, SP-GiST, no index, plain comparisons; multirange by GiST ≡ | `index.range_*`, `index.multirange_*` |
+| SP-GiST on text, btree on uuid | equality and prefix against no index; point lookup and ordered range ≡ | `index.spgist_*`, `index.uuid_*` |
+| Deduplication, page splits, rebuilds | index size with and without deduplication; random against ascending keys, `fillfactor` 70; `REINDEX` of GIN, btree and GiST ≡ ✍️ | `index.dedup_*`, `index.split_*`, `index.reindex_*` |

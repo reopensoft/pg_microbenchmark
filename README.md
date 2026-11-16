@@ -258,7 +258,7 @@ optional feature enabled.
 |---|---:|---|
 | [`cte`](#the-cte-topic-file-by-file) | 1,360 | common table expressions from every side; see the breakdown below |
 | `array` | 303 | 0 to 2000 elements, `@>` `&&` `<@` `= ANY`, GIN vs sequential plans, unnest, construction, updates; large `array_agg` results passed to functions; the `integer[]` columns of `g_intarr`; intarray operators and `query_int` |
-| `index` | 143 | build times; btree (unique, multi-column, INCLUDE, partial, expression, pattern), skip scan, backward scans, min/max, row comparisons, `IN` lists, hash, BRIN, GIN, bitmap AND/OR, HOT vs non-HOT updates; GIN and GiST operator classes of intarray |
+| `index` | 188 | build times; btree (unique, multi-column, INCLUDE, partial, expression, pattern), skip scan, backward scans, min/max, row comparisons, `IN` lists, hash, BRIN, GIN, bitmap AND/OR, HOT vs non-HOT updates; GIN and GiST operator classes of intarray; over `g_types`: GIN on JSONB (both operator classes) and tsvector, GiST and SP-GiST on ranges, SP-GiST on text, btree deduplication, page splits, `REINDEX` |
 | `plan` | 80 | join chains of 2 to 16 relations, `IN` lists up to 10,000 items, large `VALUES` lists, long OR/CASE lists, planner transformations, row count misestimates, predicate pushdown, parameter-dependent plans |
 | `pcte` | 77 | materialized top-level CTEs as independent units of work, for [comparing two server configurations](#comparing-two-server-configurations) |
 | `sort` | 69 | `ORDER BY` of the main query (top-N, key types, collation, input shape, spilling), Incremental Sort, ordering inside aggregates |
@@ -270,6 +270,11 @@ optional feature enabled.
 | `materialized` | 15 | default vs `MATERIALIZED` vs `NOT MATERIALIZED` for filter push-down, two readers, join push-down, LIMIT |
 | `locking` | 14 | `FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, `FOR KEY SHARE`, implicit locks from UPDATE and foreign keys, `SKIP LOCKED` |
 | `lateral` | 13 | top-N per group, dependent chains, set-returning functions, unnest, unpivot |
+| `cancel` | 70 | a statement interrupted at a chosen point: cancelled from inside while planning, at executor startup, on a given row of a scan, in a sort, hash join or hash aggregate, in `RETURNING`, in a trigger; errors, cancels and a terminated process in parallel workers, and the leader cancelled above Gather; `statement_timeout` over long parsing, view expansion, planning and waits |
+| `raise` | 103 | `RAISE NOTICE` in PL/pgSQL with the messages filtered out: what the compiler rejects, the text and diagnostic fields RAISE builds, how often it runs under control flow, `LIMIT`, CTEs, `LATERAL`, recursion, `RETURNING` and triggers, and what a filtered message costs |
+| `types` | 104 | integer, numeric and float limits, NaN and Infinity, UUID, `LIKE`/`ILIKE`/regex, Unicode and ICU collations, JSON, jsonpath and SQL/JSON (`JSON_TABLE`), ranges and multiranges, enum, domain, composite and polymorphic types, generated columns; `ALTER TABLE` steps on a loaded table |
+| `storage` | 63 | row versions in one transaction, savepoints, advisory locks, deadlock (opt-in), foreign key actions, `INSTEAD OF` / transition table / `TRUNCATE` triggers, TOAST storage modes, bloat with `VACUUM` and `REINDEX`, logged against unlogged and temporary tables, sequences |
+| `exec` | 61 | Memoize, Materialize, `GROUPING SETS` / `ROLLUP` / `CUBE`, JIT, cached plans and `search_path`, rows changed while a statement waits for them (EvalPlanQual), short circuits in `OR`/`AND`/`CASE`, `ROWS FROM` |
 | `resultsize` | 12 | 0 to 100k rows, narrow and wide rows, one large value |
 
 ### The `cte` topic, file by file
@@ -528,8 +533,8 @@ select * from p$q$,
 | `protocol => 'prepared'` | fixes the pgbench query protocol for this test (`isolated` mode; in `mixed` mode one pgbench runs every script and the run's `protocol` is used) |
 
 A test may be a transaction with `SET LOCAL` (or `CREATE TEMP TABLE`,
-`ANALYZE`) in front of a single query; the in-database checks cover that form
-too. Any other multi-statement script is measured by pgbench only.
+`ANALYZE`) in front of a single query; the in-database checks, the error check
+included, cover that form too. Any other multi-statement script is measured by pgbench only.
 
 DDL steps are registered with `pgmb.reg_ddl(id, kind, sql, target)`, kind
 being `schema`, `load`, `index`, `constraint` or `maintenance`. A new topic is

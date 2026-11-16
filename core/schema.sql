@@ -481,7 +481,14 @@ begin
         for t in select * from pgmb.selected
                  where 'errors' = any (tags) and expect_error is not null order by ord loop
             begin
-                execute pgmb.bind(t.sql, t.setup);
+                -- SET LOCAL in front of the statement is honoured, as in the other checks
+                parts := pgmb.script_parts(pgmb.bind(t.sql, t.setup));
+                if parts.query is not null then
+                    foreach stmt in array parts.pre loop execute stmt; end loop;
+                    execute parts.query;
+                else
+                    execute pgmb.bind(t.sql, t.setup);
+                end if;
                 -- no error: leave through an exception anyway, so that whatever
                 -- the statement did (an index, a row) is rolled back
                 raise exception using errcode = 'PGMB0';
@@ -489,7 +496,8 @@ begin
                 when sqlstate 'PGMB0' then
                     insert into pgmb_results.checks
                     values (p_run, t.id, 'errors', false, 'expected ' || t.expect_error || ', got no error');
-                when others then
+                -- OTHERS does not include query_canceled, which the cancel tests expect
+                when query_canceled or others then
                     insert into pgmb_results.checks
                     values (p_run, t.id, 'errors', sqlstate = t.expect_error,
                             case when sqlstate = t.expect_error then sqlstate

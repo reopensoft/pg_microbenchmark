@@ -80,6 +80,12 @@ call pgmb.configure(:'preset', :'label', :'data_scale', :'conn_scale', :'write_r
 \ir topics/resultsize.sql
 \ir topics/funcall.sql
 \ir topics/locking.sql
+\ir topics/cancel.sql
+\ir topics/raise.sql
+\ir topics/exec.sql
+\ir topics/storage.sql
+\ir topics/types.sql
+\ir topics/index_types.sql
 
 set search_path = pgmb_data, pgmb, public;
 set client_min_messages = info;
