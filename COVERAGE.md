@@ -46,6 +46,7 @@ What is not covered yet is in [TODO.md](TODO.md).
   - [1.15 CTE against its alternatives](#115-cte-against-its-alternatives)
   - [1.16 Side effects: NOTIFY](#116-side-effects-notify)
   - [1.17 Edge cases](#117-edge-cases)
+  - [1.18 Other gaps closed](#118-other-gaps-closed)
 - [2. Parallel execution of CTEs (`pcte`)](#2-parallel-execution-of-ctes-pcte)
 - [3. Arrays](#3-arrays)
 - [4. Indexes](#4-indexes)
@@ -70,7 +71,7 @@ What is not covered yet is in [TODO.md](TODO.md).
 
 ## 1. Common table expressions
 
-Topic `cte`, 27 files, about 1,360 tests.
+Topic `cte`, 28 files, about 1,430 tests.
 
 ### 1.1 Shapes and dependency graphs
 
@@ -291,6 +292,18 @@ Every case as an inlined and as a `MATERIALIZED` CTE, with the results compared.
 | `LIMIT`, `EXISTS`, conditional subplans | over an empty CTE (the whole source is read to say "nothing") against a first-row match; `LIMIT` larger than the CTE, `LIMIT NULL`, `LIMIT ALL`, `OFFSET` past the end; a subplan that runs for about half of the statements, always, never; needed by some of 100 rows; `EXISTS` deciding whether a second CTE is read ≡ | `cte.edge_limit_*`, `edge_exists_*`, `edge_conditional_*` |
 | Final `ORDER BY` | results returned as an ordered array, so a wrong order fails the comparison; CTE unsorted, sorted differently, sorted the same; through a chain, a join and a `UNION ALL` of CTEs; two readers asking for opposite orders; `NULLS FIRST`/`LAST` and expression keys; top-N with `OFFSET`; order named inside an aggregate and a window; over a recursive CTE, with and without `SEARCH`; with no outer `ORDER BY` only the set of rows is compared ≡ | `cte.edge_order_*` |
 
+### 1.18 Other gaps closed
+
+| Aspect | Nuances also exercised | Tests |
+|---|---|---|
+| `LATERAL` inside a CTE body | top child per parent, inlined, materialized and without a CTE; `LEFT JOIN LATERAL` with the filter outside; a set-returning function in `LATERAL` and in the select list; `LATERAL` over another CTE against a `GROUP BY` ≡ | `cte.lateral_in_body_*` |
+| Row-valued subqueries | `(a, b) IN`, `EXISTS`, a record `= ANY` an array of records; `NOT IN` against `NOT EXISTS`; a row compared with one row of the CTE; NULL inside a row; too many rows, too many columns ≡ ⚠️ | `cte.row_subquery_*`, `cte.err_row_subquery_*` |
+| How often a CTE calls a function | one reader; two readers default, `NOT MATERIALIZED` (twice the calls) and volatile (never inlined); a column nobody reads; constant arguments folded for `IMMUTABLE`, not for `STABLE`; the cost of 100,000 calls ≡ | `cte.immutable_*`, `cte.stable_*_arg_*`, `cte.volatile_*_arg_*`, `cte.volatile_unread_*`, `cte.no_function_*` |
+| JIT | an aggregate over a million rows inlined and materialized, compiled and not; a point lookup ≡ | `cte.jit_*` |
+| Extended statistics | dependent columns filtered inside and outside the CTE, inlined and materialized; number of groups; a join after the filter; each with and without `CREATE STATISTICS` ≡ | `cte.extstats_*` |
+| Equivalence classes | a constant reaching the other CTE when both are inlined, neither, one; a chain of three; the equality inside the CTE and the constant outside ≡ | `cte.eqclass_*` |
+| Memoize | an inlined CTE as the cached inner side against a CTE Scan; a `LATERAL` aggregate over a CTE; many distinct keys; each with the cache and without ≡ | `cte.memoize_*` |
+
 ---
 
 ## 2. Parallel execution of CTEs (`pcte`)
@@ -455,7 +468,7 @@ Every step is timed, with WAL volume and resulting size.
 
 ## 14. Interrupted statements
 
-Topic `cancel`, 169 tests in two files. A function that calls `pg_cancel_backend()` on its
+Topic `cancel`, 267 tests in four files. A function that calls `pg_cancel_backend()` on its
 own backend puts the cancel at an exact point of the statement; those tests
 must end with `57014`. Phases that run no user code are reached with a short
 `statement_timeout`, caught in a `DO` block, each next to a twin without the
@@ -482,6 +495,12 @@ timeout.
 | Temporary files | spilled store, sort and hash aggregate inside a CTE; no file left behind afterwards ≡ ⚠️ | `cancel.err_cte_spilled_*`, `cancel.temp_files_removed_after_cancel` |
 | Functions | set-returning in `FROM`, in the select list, per outer row; dynamic SQL four levels deep; a statement reused after two cancels; a sequence value lost; invalid regular expressions ≡ ⚠️ | `cancel.err_srf_*`, `cancel.err_dynamic_*`, `cancel.statement_reused_*`, `cancel.sequence_*`, `cancel.err_regex_*` |
 | Locks | what a cancelled block keeps: a lock taken before it, inside it, at session level; a timeout while waiting for a row, a table, a DDL lock; `lock_timeout` against `statement_timeout` ≡ ✍️ | `cancel.locks_*`, `cancel.timeout_100ms_waiting_for_*`, `cancel.*_timeout_before_*` |
+| What is left after an error | a cursor opened before a cancelled block goes on, one opened inside it is gone; insert, update, delete, `MERGE` and a writing CTE failing on row 50 leave nothing; a table lock taken in the failed block is released; an expression index whose function fails; a trigger's rows undone, its sequence values kept; a prepared statement and a cached plan used after they failed; backend memory after 50 cancels ≡ ⚠️ | `cancel.cursor_*`, `cancel.atomic_*`, `cancel.table_lock_*`, `cancel.expression_index_*`, `cancel.trigger_side_effects_*`, `cancel.reuse_*`, `cancel.memory_*` |
+| What an error costs | cancel after 1 to 1,000,000 rows against no cancel; 1 to 1,000,000 inserted rows rolled back (the largest opt-in, `optin_large_rollback`); an error through 1, 10, 100 exception blocks; 1, 10, 100 locks released by an error and by a commit; a parallel scan failing with 0 to 8 workers against one that does not ✍️ | `cancel.cost_*` |
+| Writes interrupted halfway | multi-row `VALUES`; `INSERT ... SELECT` in the source, the select list, a `BEFORE` trigger; `ON CONFLICT` on new keys, in `DO UPDATE` and its `WHERE`; `UPDATE` (rows keep their place); `DELETE` while scanning and in `RETURNING`; `MERGE` in each action, a `WHEN` condition and `NOT MATCHED BY SOURCE`; nothing is left of any of them ≡ ✍️ ⚠️ | `cancel.dml_*`, `cancel.err_dml_*` |
+| Around the write | `ON DELETE CASCADE`, `SET NULL` and a cascade down a chain; a deferred foreign key raising at `SET CONSTRAINTS`; `BEFORE` trigger, a trigger of the table an `AFTER` trigger writes to, a transition table; routing and row movement between partitions; btree, GIN, GiST and expression indexes after an insert cancelled in index maintenance ≡ ✍️ ⚠️ | `cancel.dml_fk_*`, `cancel.dml_deferred_*`, `cancel.dml_triggers_*`, `cancel.dml_partitions_*`, `cancel.dml_indexes_*` |
+| Builds and maintenance | `CREATE TABLE AS`, a materialized view, `CREATE INDEX`, `ANALYZE`, `REINDEX`, `CLUSTER` cancelled while they evaluate an index expression; a unique index over duplicates; HOT and non-HOT updates cancelled halfway, then `VACUUM` (timed in the DDL phase) ≡ ⚠️ | `cancel.dml_builds_*`, `cancel.err_dml_create_*`, `cancel.err_dml_analyze`, `cancel.err_dml_reindex`, `cancel.err_dml_cluster`, `cancel.hot_*` |
+| An upsert waiting for another backend | every client inserts key 1, the first keeps it uncommitted for 150 ms, the others are cancelled after 100 ms ✍️ | `cancel.timeout_100ms_upsert_waiting_for_other_insert` |
 | intarray errors 🧩 | a NULL element in a filter, join condition, sort key, aggregate and index build; 100 errors in a row, then a call that works; recursion over sorted growing arrays ≡ ⚠️ | `cancel.err_intarray_*`, `cancel.intarray_*` |
 | A cancel pending during parsing, analysis, rewriting | a list of 50,000 constants; 200 references to a view over two views; with the cancel already requested and without | `cancel.*_cancel_long_in_list`, `cancel.*_cancel_view_expansion_200` |
 | Timeout inside the planner | exhaustive search of a 15-relation star (about 0.4 s), 100 ms against none | `cancel.timeout_*_planner_star_join_15` |
