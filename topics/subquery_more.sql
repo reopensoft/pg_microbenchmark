@@ -322,7 +322,7 @@ call pgmb.reg('subq.calls_expected_50', '{consistency}', $q$select 50::bigint$q$
 ------------------------------------------------------------------------------
 -- a subquery as the argument of an aggregate, in FILTER, in its ORDER BY
 call pgmb.reg('subq.aggregate_argument', '{perf,planning,analyze,consistency}', $q$
-select sum((select count(*) from g_child c where c.parent_id = p.id)) from g_parent p where p.id between :id and :id + 99$q$,
+select coalesce(sum((select count(*) from g_child c where c.parent_id = p.id)), 0) from g_parent p where p.id between :id and :id + 99$q$,
     setup => '\set id random(1, :n_g_parent)', equiv => 'subq.agg_argument');
 call pgmb.reg('subq.aggregate_argument_as_join', '{perf,planning,analyze,consistency}', $q$
 select count(c.id) from g_parent p left join g_child c on c.parent_id = p.id where p.id between :id and :id + 99$q$,
@@ -489,7 +489,7 @@ select count(*), sum(k_10k) from g_narrow where k_100 = (select min(k_100) + :k 
 commit;$q$,
     setup => '\set k random(0, 50)', equiv => 'subq.parallel_initplan');
 -- (index paths off: on small data an index would be cheaper than any parallel scan)
-call pgmb.reg('subq.parallel_initplan_has_gather', '{consistency}', :'pgmb_sq_par' || $q$
+call pgmb.reg('subq.parallel_initplan_has_gather', '{consistency,needs_data}', :'pgmb_sq_par' || $q$
 set local enable_indexscan = off;
 set local enable_indexonlyscan = off;
 set local enable_bitmapscan = off;
@@ -547,14 +547,15 @@ select count(*) from g_parent p where p.id between :id and :id + 99
 -- memory: a hashed subplan must fit in memory
 ------------------------------------------------------------------------------
 -- It cannot spill to disk, so the planner only hashes a set it expects to fit;
--- with little memory the set is searched for every outer row instead.
-call pgmb.reg('subq.memory_hashed_with_enough_memory', '{consistency}', $q$
+-- with little memory the set is searched for every outer row instead. (Both
+-- need data: on empty tables every set is expected to fit.)
+call pgmb.reg('subq.memory_hashed_with_enough_memory', '{consistency,needs_data}', $q$
 begin;
 set local work_mem = '64MB';
 select sq_plan($s$select count(*) from g_narrow where id <= 10000
                   and k_uniq not in (select nullif(k_uniq, -1) from g_narrow where id <= 5000)$s$) ~ 'hashed SubPlan';
 commit;$q$, equiv => 'subq.more_true');
-call pgmb.reg('subq.memory_not_hashed_with_little_memory', '{consistency}', $q$
+call pgmb.reg('subq.memory_not_hashed_with_little_memory', '{consistency,needs_data}', $q$
 begin;
 set local work_mem = '64kB';
 select sq_plan($s$select count(*) from g_narrow where id <= 10000

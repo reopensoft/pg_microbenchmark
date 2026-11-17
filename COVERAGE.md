@@ -311,7 +311,8 @@ Every case as an inlined and as a `MATERIALIZED` CTE, with the results compared.
 ## 2. Parallel execution of CTEs (`pcte`)
 
 Plain SQL with top-level `MATERIALIZED` CTEs, meant to be run twice under
-different server settings and compared. 77 tests.
+different server settings and compared. 153 tests in two files; `report/pcte_gain.sql`
+shows the time of each CTE, their sum, the longest one and the bytes handed on.
 
 | Aspect | Nuances also exercised | Tests |
 |---|---|---|
@@ -324,6 +325,12 @@ different server settings and compared. 77 tests.
 | Short indexed queries | two key lookups, three small ranges, small diamond, one CTE, no CTE | `pcte.oltp_*` |
 | Kind of work | scan-bound, CPU-bound (hash aggregate, sort, expensive expressions), spilling sort and hash aggregate | `pcte.work_*` |
 | Result size | 10k / 1M / 10M rows × 16 / 100 / 1000 bytes; one row; wide result read twice. The three largest are opt-in (`optin_bigtransfer`) | `pcte.transfer_*` |
+| Elements bound by the disk | one wide-table scan, random index reads, bitmap reads; 2, 4, 8 elements each reading its own slice; prefetch (`effective_io_concurrency` 1 and 256) and read combining (`io_combine_limit` 8 kB); cold against warm `shared_buffers` (needs `pg_buffercache` 1.6 and a superuser) ≡ | `pcte.io_*` |
+| Elements bound by computation | `md5` chains, regular expressions, `numeric` math, PL/pgSQL per row; a window, a hash join, a recursion of 2M steps; 2, 4, 8, 16 equal elements; one long and three short ≡ | `pcte.cpu_*` |
+| Handing a result on | 1000 rows; TOAST values as pointers and detoasted; the same million rows aggregated inside, stored and read once and twice, inlined, sent through Gather; stored in memory and spilled; 1, 2, 4 readers ≡ | `pcte.xfer_*` |
+| Work against result size | much work and a small result, little work and a large one, much of both; an element bound by the disk next to one bound by computation, two of each kind | `pcte.combo_*` |
+| Shapes that hand results on | a chain handing on every row or one per group; a diamond whose root hands on every row; three large results joined by the main query ≡ | `pcte.chain_*`, `pcte.diamond_*`, `pcte.fan_in_*` |
+| Pipelines joined by the leader | two and three pipelines (slice → md5 of every row → one row per group) under `max_parallel_workers` 0, 1, 2, 3, 4, 6 (and 9); pipelines of unequal length and cost, bound by the disk, mixed; every row handed to the leader; the leader's join by hash, merge, nested loop ≡ | `pcte.pipelines_*` |
 
 ---
 

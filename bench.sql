@@ -65,6 +65,7 @@ call pgmb.configure(:'preset', :'label', :'data_scale', :'conn_scale', :'write_r
 \ir topics/cte_more.sql
 \ir topics/cte_multitable.sql
 \ir topics/pcte.sql
+\ir topics/pcte_heavy.sql
 \ir topics/materialized.sql
 \ir topics/distinct.sql
 \ir topics/nulls.sql
