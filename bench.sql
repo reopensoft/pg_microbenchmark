@@ -63,6 +63,7 @@ call pgmb.configure(:'preset', :'label', :'data_scale', :'conn_scale', :'write_r
 \ir topics/cte_alternatives.sql
 \ir topics/cte_edge.sql
 \ir topics/cte_more.sql
+\ir topics/cte_multitable.sql
 \ir topics/pcte.sql
 \ir topics/materialized.sql
 \ir topics/distinct.sql
@@ -78,6 +79,8 @@ call pgmb.configure(:'preset', :'label', :'data_scale', :'conn_scale', :'write_r
 \ir topics/index_intarray.sql
 \ir topics/plan.sql
 \ir topics/lateral.sql
+\ir topics/subquery.sql
+\ir topics/subquery_more.sql
 \ir topics/window.sql
 \ir topics/resultsize.sql
 \ir topics/funcall.sql

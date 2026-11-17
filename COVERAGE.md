@@ -4,7 +4,7 @@
 
 **What pg_microbenchmark tests — topic by topic, aspect by aspect.**
 
-About 2,800 tests in 21 topics. This file lists the aspects each group of
+About 3,000 tests in 22 topics. This file lists the aspects each group of
 tests is about, and the nuances that are exercised along the way.
 
 </div>
@@ -66,12 +66,13 @@ What is not covered yet is in [TODO.md](TODO.md).
 - [18. Data types and DDL (`types`)](#18-data-types-and-ddl-types)
 - [19. Access methods over `g_types`](#19-access-methods-over-g_types)
 - [20. NOTIFY (`notify`)](#20-notify-notify)
+- [21. Nested queries without CTEs (`subq`)](#21-nested-queries-without-ctes-subq)
 
 ---
 
 ## 1. Common table expressions
 
-Topic `cte`, 28 files, about 1,430 tests.
+Topic `cte`, 29 files, about 1,490 tests.
 
 ### 1.1 Shapes and dependency graphs
 
@@ -89,6 +90,7 @@ Topic `cte`, 28 files, about 1,430 tests.
 | Nested scopes, shadowed names | `WITH` inside a CTE body; diamond inside a diamond; a local CTE built from the outer CTE it hides ≡ | `cte.graph_nested_scope_*`, `graph_shadowed_*` |
 | Mixed materialization | `MATERIALIZED` and `NOT MATERIALIZED` in one diamond and one chain ≡ | `cte.graph_mixed_*` |
 | Recursive node, recursion with several readers | recursive node in the middle of a chain; two chained recursive nodes; recursion written three times against one shared; a reader with `LIMIT` beside a reader of everything ≡ | `cte.graph_recursive_*` |
+| Graphs over several tables | a tree whose leaves read `g_parent`, `g_child`, `g_events`, `g_dim`; one `g_narrow` node joined to `g_dim` and to `g_parent`, also with different filters per reader; a diamond and a three-way fan-out whose shared node is a join; star and snowflake; `LEFT JOIN` filtered on the preserved and on the nullable side, semi join, anti join three ways; chains of 4, 8, 12 levels cycling through four tables, also with collapse limits at 1; three levels of `g_tree` joined to `g_parent` and `g_child` at every step. Every shape default, `MATERIALIZED`, `NOT MATERIALIZED` and without CTEs ≡ | `cte.multi_*` |
 
 ### 1.2 Inlining and materialization
 
@@ -601,3 +603,27 @@ listener sees it and the order of arrival are not tested. Calls of
 | How often the function is called | identical payloads (100 calls, one notification); from `VALUES`, a table, a scalar subquery, `CASE`, an SQL function, `LATERAL`, `RETURNING`, a failed block; under `LIMIT`, `EXISTS`, `count(*)`; CTE with two readers, in a diamond, unreferenced ≡ | `notify.calls_*` |
 | Triggers | `AFTER` and `BEFORE` row, statement, `TRUNCATE`, transition table; insert, update, delete, `ON CONFLICT`, `MERGE`; cost per row against per statement ≡ ✍️ | `notify.trigger_*` |
 | Limits and the queue | 7999 bytes accepted, 8000 refused, counted in bytes not characters; channel name of 64 characters; an unquoted dynamic command; `pg_notification_queue_usage()` ≡ ⚠️ | `notify.payload_*`, `notify.err_*`, `notify.queue_usage_*` |
+
+## 21. Nested queries without CTEs (`subq`)
+
+Topic `subq`, 193 tests in two files. Every form next to an equivalent one (flat query,
+join, window or CTE).
+
+| Aspect | Nuances also exercised | Tests |
+|---|---|---|
+| `FROM` | an outer filter through 1, 3 and 10 levels; `OFFSET 0` and a volatile column as barriers; an aggregate filtered on the group key and on the aggregate; `DISTINCT`; a window filtered on its partition key ≡ | `subq.from_*` |
+| Select list | uncorrelated (InitPlan) and correlated (SubPlan) scalars; two in one list; a scalar nested in a scalar; `ARRAY(...)`, `EXISTS(...)`; too many rows, too many columns ≡ ⚠️ | `subq.select_*`, `subq.err_select_*` |
+| `JOIN` | derived tables in `INNER`, `LEFT`, `RIGHT`, `FULL` joins against CTEs; a subquery in `ON`; four derived tables, also with collapse limits at 1 ≡ | `subq.join_*` |
+| `LATERAL` | top 3 per parent; a chain of two; `LEFT JOIN LATERAL` with nothing on the right; a `LIMIT` taken from the outer row; Memoize on and off ≡ | `subq.lateral_*` |
+| `WHERE` | semi join four ways; anti join four ways; `NOT IN` as a hashed and a plain subplan, and on a `NOT NULL` column (an anti join in recent versions); `NOT IN` with a NULL in the set; `> ALL` against `> max`, the empty set; three levels of `IN`; scalar comparison uncorrelated and correlated ≡ | `subq.where_*` |
+| `LIMIT`, `OFFSET` | values from subqueries; NULL as no limit; negative values and a correlated limit refused ≡ ⚠️ | `subq.limit_*`, `subq.err_limit_*`, `subq.err_offset_*` |
+| `GROUP BY`, `HAVING` | grouping by a correlated scalar; `HAVING` against an aggregate of aggregates; an aggregate over an aggregated derived table; a subquery correlated with the grouping column ≡ | `subq.group_by_*`, `subq.having_*` |
+| Against CTEs | an intermediate result used twice: written twice, as a CTE, as `NOT MATERIALIZED`; how often a function in it is called ≡ | `subq.vs_cte_*` |
+| Writes | `SET col = (subquery)` and `SET (a, b) = (subquery)` against `UPDATE ... FROM`; `UPDATE ... FROM (subquery)` against `IN`; `DELETE ... USING (subquery)` against `EXISTS`; `MERGE ... USING (subquery)`; a subquery in `RETURNING`; `INSERT ... VALUES` and `ON CONFLICT DO UPDATE` with subqueries ≡ ✍️ | `subq.write_*` |
+| How often it runs | uncorrelated once, correlated per row, a hashed subplan once; `nextval()` once or per row; an untaken `CASE` branch and an unneeded `COALESCE` argument never, `NULLIF` once ≡ | `subq.calls_*`, `subq.case_*`, `subq.coalesce_*`, `subq.nullif_*` |
+| What the planner makes of it | `EXISTS`, `IN`, `IN` with `LIMIT` become joins, `NOT EXISTS` an anti join; `OR` of two `EXISTS`, `EXISTS` with `HAVING`, `NOT IN` over a nullable expression stay subplans; `NOT IN` on a `NOT NULL` column recorded for comparing versions ≡ | `subq.plan_*`, `subq.or_of_two_exists*`, `subq.exists_with_having*` |
+| Run-time partition pruning | 15 of 16 partitions never scanned for a value from an InitPlan; a new value per outer row ≡ | `subq.pruning_*` |
+| Other places | `ORDER BY` and `DISTINCT ON` by a subquery (order checked as an array); an aggregate's argument, `FILTER` and `ORDER BY`; a window's `PARTITION BY`; a set-returning function's argument; `VALUES`; set operation branches with their own `LIMIT`; `ARRAY()` and `ROW()` ≡ | `subq.order_by_*`, `subq.distinct_on_*`, `subq.aggregate_*`, `subq.window_*`, `subq.srf_*`, `subq.values_*`, `subq.set_operation_*`, `subq.array_*`, `subq.row_*` |
+| Edge sets, correlation | empty sets, duplicates, NULL on either side; references two and three levels up ≡ | `subq.edge_*`, `subq.correlation_*` |
+| Locks, parallel, generic plans, memory | `FOR UPDATE` in a subquery in `FROM` locks only the rows that pass the outer filter, in `WHERE` all of them; an InitPlan under Gather; a correlated subplan in a parallel scan; generic against custom plans with the parameter in the subquery; a hashed subplan only when the set fits in `work_mem` ≡ ✍️ | `subq.lock_*`, `subq.parallel_*`, `subq.prepared_*`, `subq.memory_*` |
+| Refused places, abstractions | `CHECK`, `DEFAULT`, a generated column, an index expression and a partial index predicate refuse a subquery; a view with subqueries; a security barrier view; an SQL function made of a scalar subquery is not inlined ≡ ⚠️ | `subq.err_in_*`, `subq.view_*`, `subq.security_barrier_*`, `subq.sql_function_*` |

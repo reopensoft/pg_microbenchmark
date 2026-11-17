@@ -256,7 +256,7 @@ optional feature enabled.
 
 | Topic | Tests | Covers |
 |---|---:|---|
-| [`cte`](#the-cte-topic-file-by-file) | 1,427 | common table expressions from every side; see the breakdown below |
+| [`cte`](#the-cte-topic-file-by-file) | 1,493 | common table expressions from every side; see the breakdown below |
 | `array` | 354 | 0 to 2000 elements, `@>` `&&` `<@` `= ANY`, GIN vs sequential plans, unnest, construction, updates; large `array_agg` results passed to functions; the `integer[]` columns of `g_intarr`; intarray operators and `query_int`; the other intarray functions (`sort_asc`, `sort_desc`, `idx`, `subarray`, `icount`, `#`, `intset`, set operators) and integer paths in recursive queries |
 | `index` | 188 | build times; btree (unique, multi-column, INCLUDE, partial, expression, pattern), skip scan, backward scans, min/max, row comparisons, `IN` lists, hash, BRIN, GIN, bitmap AND/OR, HOT vs non-HOT updates; GIN and GiST operator classes of intarray; over `g_types`: GIN on JSONB (both operator classes) and tsvector, GiST and SP-GiST on ranges, SP-GiST on text, btree deduplication, page splits, `REINDEX` |
 | `plan` | 80 | join chains of 2 to 16 relations, `IN` lists up to 10,000 items, large `VALUES` lists, long OR/CASE lists, planner transformations, row count misestimates, predicate pushdown, parameter-dependent plans |
@@ -276,6 +276,7 @@ optional feature enabled.
 | `storage` | 63 | row versions in one transaction, savepoints, advisory locks, deadlock (opt-in), foreign key actions, `INSTEAD OF` / transition table / `TRUNCATE` triggers, TOAST storage modes, bloat with `VACUUM` and `REINDEX`, logged against unlogged and temporary tables, sequences |
 | `exec` | 61 | Memoize, Materialize, `GROUPING SETS` / `ROLLUP` / `CUBE`, JIT, cached plans and `search_path`, rows changed while a statement waits for them (EvalPlanQual), short circuits in `OR`/`AND`/`CASE`, `ROWS FROM` |
 | `notify` | 80 | `NOTIFY` and `pg_notify()` without a listener: ways of sending, payload types, savepoints, repeated notifications, how often the function is called from SQL, CTEs and triggers, payload and channel limits |
+| `subq` | 193 | nested queries without `WITH`: derived tables and the barriers to pull-up, scalar subqueries in the select list, derived tables in every join type, `LATERAL`, semi and anti joins and quantified comparisons in `WHERE`, `LIMIT`/`OFFSET` from a subquery, `GROUP BY` and `HAVING`; the same query as subqueries and as CTEs; subqueries in writes, how often they run and what the planner makes of them, run-time partition pruning, ORDER BY, CASE, aggregates, windows, edge sets, multi-level correlation, locks, parallel and generic plans, places where they are refused, views and SQL functions |
 | `resultsize` | 12 | 0 to 100k rows, narrow and wide rows, one large value |
 
 ### The `cte` topic, file by file
@@ -292,6 +293,7 @@ optional feature enabled.
 | `cte_shape.sql` | pruning of unneeded CTEs, columns, joins and branches; nesting to five levels and in every clause |
 | `cte_joinalgo.sql` | CTEs under Nested Loop, Hash Join and Merge Join, natural and forced |
 | `cte_graph.sql` | dependency graphs: single, linear, deep chain, fan-out, fan-in, diamonds, trees, wide, deep, dense, sparse and disconnected DAGs, orphans, dead branches, shared nodes, repeated leaves, nested and shadowed scopes, recursive nodes — each as default, all `MATERIALIZED` and all `NOT MATERIALIZED` |
+| `cte_multitable.sql` | dependency graphs whose nodes read different tables: trees and DAGs with four sources, diamonds and fan-outs on a join, star and snowflake, left, semi and anti joins between nodes, chains adding a table per level, recursion through two tables |
 | `cte_scope.sql` | a CTE named like a table, forward references with `RECURSIVE`, column lists, ambiguity, `VALUES`/`TABLE`, correlation with the outer query, `UNION` branches, `SEARCH`/`CYCLE` column names |
 | `cte_alternatives.sql` | the same six tasks written as a CTE, a subquery, `LATERAL`, a view, a materialized view and a temporary table |
 | `cte_edge.sql` | edge cases, each inlined and materialized: zero rows, one row, millions of rows; NULLs, duplicates, arrays, JSONB and wide text as content; 100 references; nested loops that rescan the CTE; unread CTEs; `LIMIT`, `EXISTS` and conditionally executed subplans; the final `ORDER BY` checked without relying on the CTE's own order |

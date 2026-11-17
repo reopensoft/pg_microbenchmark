@@ -385,7 +385,7 @@ call pgmb.reg('cancel.dml_upsert_cancelled_expected', '{consistency}',
     $q$select '3 upserts cancelled, rows 100, sum 0'::text$q$, equiv => 'cancel.dml_upsert');
 call pgmb.reg('cancel.dml_update_cancelled', '{consistency}', $q$select cdml_update_facts()$q$, equiv => 'cancel.dml_update');
 call pgmb.reg('cancel.dml_update_cancelled_expected', '{consistency}',
-    $q$select 'rows keep their place: true, sum 0'::text$q$, equiv => 'cancel.dml_update');
+    $q$select 'rows keep their place: t, sum 0'::text$q$, equiv => 'cancel.dml_update');
 call pgmb.reg('cancel.dml_delete_cancelled', '{consistency}', $q$select cdml_delete_facts()$q$, equiv => 'cancel.dml_delete');
 call pgmb.reg('cancel.dml_delete_cancelled_expected', '{consistency}',
     $q$select '3 deletes cancelled, rows left 100'::text$q$, equiv => 'cancel.dml_delete');
@@ -398,7 +398,7 @@ select '2 cancelled, parents 10, cascade children 100, set null children with a 
     equiv => 'cancel.dml_fk');
 call pgmb.reg('cancel.dml_deferred_constraint', '{consistency}', $q$select cdml_deferred_facts()$q$, equiv => 'cancel.dml_deferred');
 call pgmb.reg('cancel.dml_deferred_constraint_expected', '{consistency}',
-    $q$select 'insert accepted: true, SET CONSTRAINTS raised 23503, rows 0'::text$q$, equiv => 'cancel.dml_deferred');
+    $q$select 'insert accepted: t, SET CONSTRAINTS raised 23503, rows 0'::text$q$, equiv => 'cancel.dml_deferred');
 call pgmb.reg('cancel.dml_triggers_cancelled', '{consistency}', $q$select cdml_trigger_facts()$q$, equiv => 'cancel.dml_triggers');
 call pgmb.reg('cancel.dml_triggers_cancelled_expected', '{consistency}',
     $q$select '3 cancelled, rows in a 0, rows in b 0'::text$q$, equiv => 'cancel.dml_triggers');
@@ -413,7 +413,8 @@ call pgmb.reg('cancel.dml_builds_cancelled_expected', '{consistency}',
     $q$select '6 cancelled, left behind: nothing, rows 100'::text$q$, equiv => 'cancel.dml_builds');
 
 ------------------------------------------------------------------------------
--- each interruption on its own: the statement must end with 57014
+-- each interruption on its own: the statement must end with 57014 (commands
+-- that the checks cannot run after a SET LOCAL are wrapped in a DO block)
 ------------------------------------------------------------------------------
 call pgmb.reg('cancel.err_dml_insert_select_source', '{errors}',
     $q$insert into g_cdml_target select n, 0 from generate_series(1, 100) n where cancel_if(n = 50) = 1$q$, expect_error => '57014');
@@ -484,27 +485,31 @@ call pgmb.reg('cancel.err_dml_create_table_as', '{errors}',
     $q$create table g_cdml_ctas_e as select n, cancel_if(n = 5000) as x from generate_series(1, 10000) n$q$,
     expect_error => '57014');
 call pgmb.reg('cancel.err_dml_create_index', '{errors}', $q$
-begin;
-set local pgmb.cancel_at = '50';
-create index g_cdml_idx_key_e on g_cdml_idx (cdml_key(v), id);
-commit;$q$, expect_error => '57014');
+do $do$
+begin
+    perform set_config('pgmb.cancel_at', '50', true);
+    create index g_cdml_idx_key_e on pgmb_data.g_cdml_idx (pgmb_data.cdml_key(v), id);
+end $do$$q$, expect_error => '57014');
 call pgmb.reg('cancel.err_dml_create_unique_index_duplicates', '{errors}',
     $q$create unique index g_cdml_part_0_p_u on g_cdml_part_0 (p)$q$, expect_error => '23505');
 call pgmb.reg('cancel.err_dml_analyze', '{errors}', $q$
-begin;
-set local pgmb.cancel_at = '50';
-analyze g_cdml_idx;
-commit;$q$, expect_error => '57014');
+do $do$
+begin
+    perform set_config('pgmb.cancel_at', '50', true);
+    analyze pgmb_data.g_cdml_idx;
+end $do$$q$, expect_error => '57014');
 call pgmb.reg('cancel.err_dml_reindex', '{errors}', $q$
-begin;
-set local pgmb.cancel_at = '50';
-reindex index g_cdml_idx_key;
-commit;$q$, expect_error => '57014');
+do $do$
+begin
+    perform set_config('pgmb.cancel_at', '50', true);
+    reindex index pgmb_data.g_cdml_idx_key;
+end $do$$q$, expect_error => '57014');
 call pgmb.reg('cancel.err_dml_cluster', '{errors}', $q$
-begin;
-set local pgmb.cancel_at = '50';
-cluster g_cdml_idx using g_cdml_idx_pkey;
-commit;$q$, expect_error => '57014');
+do $do$
+begin
+    perform set_config('pgmb.cancel_at', '50', true);
+    cluster pgmb_data.g_cdml_idx using g_cdml_idx_pkey;
+end $do$$q$, expect_error => '57014');
 
 ------------------------------------------------------------------------------
 -- HOT and non-HOT updates cancelled halfway, then VACUUM (DDL phase)

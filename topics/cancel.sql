@@ -36,14 +36,14 @@ call pgmb.reg_ddl('cancel.create_functions', 'schema', $q$
 create function cancel_now() returns int language plpgsql as
 'begin perform pg_cancel_backend(pg_backend_pid()); perform pg_sleep(1); return 1; end';
 create function cancel_if(cond boolean) returns int language plpgsql as
-'begin if cond then perform cancel_now(); end if; return 1; end';
+'begin if cond then perform pgmb_data.cancel_now(); end if; return 1; end';
 -- declared immutable so that the planner evaluates it while folding constants
 create function cancel_immutable(v int) returns int language plpgsql immutable as
-'begin perform cancel_now(); return v; end';
+'begin perform pgmb_data.cancel_now(); return v; end';
 -- stable, and harmless until pgmb.cancel_armed is switched on
 create function cancel_armed(v int) returns int language plpgsql stable as
 $f$begin
-    if current_setting('pgmb.cancel_armed', true) = 'on' then perform cancel_now(); end if;
+    if current_setting('pgmb.cancel_armed', true) = 'on' then perform pgmb_data.cancel_now(); end if;
     return v;
 end$f$;
 -- The query has no parameters, so its plan is built in the first pass and
